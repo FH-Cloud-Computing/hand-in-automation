@@ -73,6 +73,16 @@ func runTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerCl
 		_ = wipeAccount(ctx, clientFactory)
 	}()
 
+	tfStateFile := path.Join(directory, "terraform.tfstate")
+	_, err = os.Stat(tfStateFile)
+	if err == nil {
+		err := os.Remove(tfStateFile)
+		if err != nil {
+			log.Printf("failed to remove tfstate file (%v)", err)
+			return err
+		}
+	}
+
 	exoscaleClient := clientFactory.GetExoscaleClient()
 	log.Printf("creating Exoscale API key for Terraform...")
 	resp, err := exoscaleClient.RequestWithContext(ctx, &egoscale.CreateAPIKey{

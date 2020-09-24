@@ -7,6 +7,9 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/exoscale/egoscale"
 	"github.com/janoszen/exoscale-account-wiper/plugin"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"time"
 )
 
@@ -36,8 +39,7 @@ func (tc *TestContext) InitializeTestSuite(ctx *godog.TestSuiteContext) {
 
 func (tc *TestContext) InitializeScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(`^I have applied the Terraform code$`, tc.iHaveAppliedTheTerraformCode)
-	ctx.Step(`^I resize the instance pool to two$`, tc.iResizeTheInstancePoolToTwo)
-	ctx.Step(`^I resize the instance pool to zero$`, tc.iResizeTheInstancePoolToZero)
+	ctx.Step(`^I kill all instances in the pool$`, tc.iKillAllInstancesInThePool)
 	ctx.Step(`^I should receive the answer "([^"]*)" when querying the "([^"]*)" endpoint of the NLB$`, tc.iShouldReceiveTheAnswerWhenQueryingTheEndpointOfTheNLB)
 	ctx.Step(`^I wait for (\d+) instances to be present$`, tc.iWaitForInstancesToBePresent)
 	ctx.Step(`^I wait for no instances to be present$`, tc.iWaitForNoInstancesToBePresent)
@@ -65,24 +67,91 @@ func (tc *TestContext) iHaveAppliedTheTerraformCode() error {
 	return nil
 }
 
-func (tc *TestContext) iResizeTheInstancePoolToTwo() error {
-	return godog.ErrPending
+func (tc *TestContext) iKillAllInstancesInThePool() error {
+	instancePool, _, err := tc.getInstancePool()
+	if err != nil {
+		return err
+	}
+
+	exoscaleClient := tc.clientFactory.GetExoscaleClient()
+	for _, vm := range instancePool.VirtualMachines {
+		if vm.State == "Running" || vm.State == "Starting" {
+			_, err := exoscaleClient.RequestWithContext(tc.ctx, &egoscale.DestroyVirtualMachine{
+				ID: vm.ID,
+			})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return err
 }
 
-func (tc *TestContext) iResizeTheInstancePoolToZero() error {
-	return godog.ErrPending
+func (tc *TestContext) iShouldReceiveTheAnswerWhenQueryingTheEndpointOfTheNLB(expectedAnswer string, endpoint string) error {
+	nlb, _, err := tc.getNLB()
+	if err != nil {
+		return err
+	}
+
+	backoff := 10 * time.Second
+	retries := 0
+	maxRetries := 30
+
+	for {
+		retries++
+		result, err := http.Get(fmt.Sprintf("http://%s%s", nlb.IPAddress, endpoint))
+		if err != nil {
+			if retries > maxRetries {
+				return fmt.Errorf("HTTP service failed to come up (%v)", err)
+			}
+			log.Printf("waiting for HTTP service to become available (%d)", retries * int(backoff / time.Second))
+			time.Sleep(backoff)
+			continue
+		}
+		body, err := ioutil.ReadAll(result.Body)
+		if err != nil {
+			return err
+		}
+		if string(body) != expectedAnswer {
+			return fmt.Errorf("returned answer %s did not match expected answer %s", body, expectedAnswer)
+		}
+		return nil
+	}
 }
 
-func (tc *TestContext) iShouldReceiveTheAnswerWhenQueryingTheEndpointOfTheNLB(arg1, arg2 string) error {
-	return godog.ErrPending
-}
+func (tc *TestContext) iWaitForInstancesToBePresent(instances int) error {
+	backoff := 10 * time.Second
+	retries := 0
+	retryLimit := 30
+	for {
+		instancePool, _, err := tc.getInstancePool()
+		if err != nil {
+			log.Printf("failed to fetch instance pool (%v)", err)
+			time.Sleep(backoff)
+			continue;
+		}
 
-func (tc *TestContext) iWaitForInstancesToBePresent(arg1 int) error {
-	return godog.ErrPending
+		runningVMs := 0
+		for _, vm := range instancePool.VirtualMachines {
+			if vm.State == "Running" {
+				runningVMs++
+			}
+		}
+		if runningVMs == instances {
+			return nil;
+		}
+
+		retries++
+		if retries > retryLimit {
+			return fmt.Errorf("invalid number of running instances (%d) for instance pool, expected %d", runningVMs, instances)
+		}
+		log.Printf("waiting for %d instances to be present, currently %d (%d)", instances, runningVMs, retries * int(backoff / time.Second))
+		time.Sleep(backoff)
+	}
 }
 
 func (tc *TestContext) iWaitForNoInstancesToBePresent() error {
-	return godog.ErrPending
+	return tc.iWaitForInstancesToBePresent(0)
 }
 
 func (tc *TestContext) oneInstancePoolShouldExist() error {
@@ -192,7 +261,7 @@ func (tc *TestContext) allBackendsShouldBeHealthyAfterSeconds(seconds int) error
 		healthCheckStatuses := service.HealthcheckStatus
 		unhealthyBackends := 0
 		for _, status := range healthCheckStatuses {
-			if status.Status != "healthy" {
+			if status.Status != "success" {
 				unhealthyBackends++
 			}
 		}
@@ -201,6 +270,7 @@ func (tc *TestContext) allBackendsShouldBeHealthyAfterSeconds(seconds int) error
 			if tries > seconds/int(backoff/time.Second) {
 				return fmt.Errorf("%d out of %d backends for the service are unhealthy", unhealthyBackends, len(service.HealthcheckStatus))
 			}
+			log.Printf("%d out of %d backends for the service are unhealthy (%d)", unhealthyBackends, len(service.HealthcheckStatus), tries * int(backoff/time.Second))
 			time.Sleep(backoff)
 		} else {
 			return nil
