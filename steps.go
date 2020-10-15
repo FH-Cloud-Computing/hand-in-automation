@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/cucumber/godog"
 	"github.com/docker/docker/client"
@@ -10,26 +11,30 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"path"
 	"time"
 )
 
 type TestContext struct {
-	ctx context.Context
+	ctx           context.Context
 	clientFactory *plugin.ClientFactory
 	dockerClient  *client.Client
-	directory string
-	userApiKey string
+	directory     string
+	userApiKey    string
 	userApiSecret string
+	logFile       *os.File
 }
 
-func NewTestContext(ctx context.Context, clientFactory *plugin.ClientFactory, dockerClient *client.Client, directory string, userApiKey string, userApiSecret string) *TestContext {
+func NewTestContext(ctx context.Context, clientFactory *plugin.ClientFactory, dockerClient *client.Client, directory string, userApiKey string, userApiSecret string, logFile *os.File) *TestContext {
 	return &TestContext{
-		ctx: ctx,
+		ctx:           ctx,
 		clientFactory: clientFactory,
-		dockerClient: dockerClient,
-		directory: directory,
-		userApiKey: userApiKey,
+		dockerClient:  dockerClient,
+		directory:     directory,
+		userApiKey:    userApiKey,
 		userApiSecret: userApiSecret,
+		logFile:       logFile,
 	}
 }
 
@@ -39,28 +44,80 @@ func (tc *TestContext) InitializeTestSuite(ctx *godog.TestSuiteContext) {
 
 func (tc *TestContext) InitializeScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(`^I have applied the Terraform code$`, tc.iHaveAppliedTheTerraformCode)
+	ctx.Step(`^I destroy using the Terraform code$`, tc.iHaveDestroyedUsingTheTerraformCode)
+	ctx.Step(`^the tfstate file should be empty$`, tc.theTfstateFileShouldBeEmpty)
+	ctx.Step(`^I set the instance pool to have (\d+) instances$`, tc.iSetTheInstancePoolToHaveInstances)
 	ctx.Step(`^I kill all instances in the pool$`, tc.iKillAllInstancesInThePool)
 	ctx.Step(`^I should receive the answer "([^"]*)" when querying the "([^"]*)" endpoint of the NLB$`, tc.iShouldReceiveTheAnswerWhenQueryingTheEndpointOfTheNLB)
 	ctx.Step(`^I wait for (\d+) instances to be present$`, tc.iWaitForInstancesToBePresent)
 	ctx.Step(`^I wait for no instances to be present$`, tc.iWaitForNoInstancesToBePresent)
 	ctx.Step(`^one instance pool should exist$`, tc.oneInstancePoolShouldExist)
+	ctx.Step(`^no instance pool should exist$`, tc.noInstancePoolShouldExist)
 	ctx.Step(`^one NLB should exist$`, tc.oneNLBShouldExist)
+	ctx.Step(`^no NLB should exist$`, tc.noNLBShouldExist)
 	ctx.Step(`^the NLB should have one service$`, tc.theNLBShouldHaveOneService)
 	ctx.Step(`^the service should listen to port (\d+)$`, tc.theServiceShouldListenToPort)
 	ctx.Step("^all backends should be healthy after (\\d+) seconds$", tc.allBackendsShouldBeHealthyAfterSeconds)
 }
 
 func (tc *TestContext) iHaveAppliedTheTerraformCode() error {
-	err := executeTerraform(
-		tc.ctx,
-		tc.dockerClient,
-		tc.directory,
+	err := executeTerraform(tc.ctx, tc.dockerClient, tc.directory, []string{
+		"apply",
+		"-var", fmt.Sprintf("exoscale_key=%s", tc.userApiKey),
+		"-var", fmt.Sprintf("exoscale_secret=%s", tc.userApiSecret),
+	}, tc.logFile)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (tc *TestContext) iHaveDestroyedUsingTheTerraformCode() error {
+	return executeTerraform(
+		tc.ctx, tc.dockerClient, tc.directory,
 		[]string{
-			"apply",
+			"destroy",
 			"-var", fmt.Sprintf("exoscale_key=%s", tc.userApiKey),
 			"-var", fmt.Sprintf("exoscale_secret=%s", tc.userApiSecret),
 		},
+		tc.logFile,
 	)
+}
+
+func (tc *TestContext) theTfstateFileShouldBeEmpty() error {
+	directory := tc.directory
+	tfStateFile := path.Join(directory, "terraform.tfstate")
+	fileContents, err := ioutil.ReadFile(tfStateFile)
+	if err != nil {
+		//No file means no tfstate file
+		return nil
+	}
+	data := make(map[string]interface{})
+	err = json.Unmarshal(fileContents, &data)
+	if err != nil {
+		//No JSON = no problem
+		return nil
+	}
+	if resources, ok := data["resources"]; ok {
+		if count := len(resources.([]interface{})); count != 0 {
+			return fmt.Errorf("tfstate file still contains %d items", count)
+		}
+	}
+	return nil
+}
+
+func (tc *TestContext) iSetTheInstancePoolToHaveInstances(instances int) error {
+	instancePool, _, err := tc.getInstancePool()
+	if err != nil {
+		return err
+	}
+
+	exoscaleClient := tc.clientFactory.GetExoscaleClient()
+	_, err = exoscaleClient.RequestWithContext(tc.ctx, &egoscale.ScaleInstancePool{
+		ID:     instancePool.ID,
+		ZoneID: instancePool.ZoneID,
+		Size:   instances,
+	})
 	if err != nil {
 		return err
 	}
@@ -104,7 +161,7 @@ func (tc *TestContext) iShouldReceiveTheAnswerWhenQueryingTheEndpointOfTheNLB(ex
 			if retries > maxRetries {
 				return fmt.Errorf("HTTP service failed to come up (%v)", err)
 			}
-			log.Printf("waiting for HTTP service to become available (%d)", retries * int(backoff / time.Second))
+			log.Printf("waiting for HTTP service to become available (%d)", retries*int(backoff/time.Second))
 			time.Sleep(backoff)
 			continue
 		}
@@ -128,7 +185,7 @@ func (tc *TestContext) iWaitForInstancesToBePresent(instances int) error {
 		if err != nil {
 			log.Printf("failed to fetch instance pool (%v)", err)
 			time.Sleep(backoff)
-			continue;
+			continue
 		}
 
 		runningVMs := 0
@@ -138,14 +195,14 @@ func (tc *TestContext) iWaitForInstancesToBePresent(instances int) error {
 			}
 		}
 		if runningVMs == instances {
-			return nil;
+			return nil
 		}
 
 		retries++
 		if retries > retryLimit {
 			return fmt.Errorf("invalid number of running instances (%d) for instance pool, expected %d", runningVMs, instances)
 		}
-		log.Printf("waiting for %d instances to be present, currently %d (%d)", instances, runningVMs, retries * int(backoff / time.Second))
+		log.Printf("waiting for %d instances to be present, currently %d (%d)", instances, runningVMs, retries*int(backoff/time.Second))
 		time.Sleep(backoff)
 	}
 }
@@ -157,6 +214,31 @@ func (tc *TestContext) iWaitForNoInstancesToBePresent() error {
 func (tc *TestContext) oneInstancePoolShouldExist() error {
 	_, _, err := tc.getInstancePool()
 	return err
+}
+
+func (tc *TestContext) noInstancePoolShouldExist() error {
+	exoscaleClient := tc.clientFactory.GetExoscaleClient()
+	resp, err := exoscaleClient.RequestWithContext(tc.ctx, egoscale.ListZones{})
+	if err != nil {
+		return err
+	}
+	instancePoolCount := 0
+	var instancePoolNames []string
+	for _, z := range resp.(*egoscale.ListZonesResponse).Zone {
+		resp, err := exoscaleClient.RequestWithContext(tc.ctx, egoscale.ListInstancePools{ZoneID: z.ID})
+		if err != nil {
+			return err
+		}
+
+		for _, i := range resp.(*egoscale.ListInstancePoolsResponse).InstancePools {
+			instancePoolCount++
+			instancePoolNames = append(instancePoolNames, i.Name)
+		}
+	}
+	if instancePoolCount != 0 {
+		return fmt.Errorf("invalid number of instance pools: %d", instancePoolCount)
+	}
+	return nil
 }
 
 func (tc *TestContext) getInstancePool() (*egoscale.InstancePool, *egoscale.Zone, error) {
@@ -191,6 +273,32 @@ func (tc *TestContext) getInstancePool() (*egoscale.InstancePool, *egoscale.Zone
 func (tc *TestContext) oneNLBShouldExist() error {
 	_, _, err := tc.getNLB()
 	return err
+}
+
+func (tc *TestContext) noNLBShouldExist() error {
+	exoscaleClient := tc.clientFactory.GetExoscaleClient()
+	resp, err := exoscaleClient.RequestWithContext(tc.ctx, egoscale.ListZones{})
+	if err != nil {
+		return fmt.Errorf("failed to list zones (%v)", err)
+	}
+	nlbCount := 0
+	var nlbNames []string
+	for _, z := range resp.(*egoscale.ListZonesResponse).Zone {
+		v2Ctx := tc.clientFactory.GetExoscaleV2Context(z.Name, tc.ctx)
+		list, err := exoscaleClient.ListNetworkLoadBalancers(v2Ctx, z.Name)
+		if err != nil {
+			return fmt.Errorf("unable to list Network Load Balancers in zone %s: %v", z.Name, err)
+		}
+
+		for _, n := range list {
+			nlbCount++
+			nlbNames = append(nlbNames, n.Name)
+		}
+	}
+	if nlbCount != 0 {
+		return fmt.Errorf("invalid number of NLB's: %d", nlbCount)
+	}
+	return nil
 }
 
 func (tc *TestContext) getNLB() (*egoscale.NetworkLoadBalancer, *egoscale.Zone, error) {
@@ -270,7 +378,7 @@ func (tc *TestContext) allBackendsShouldBeHealthyAfterSeconds(seconds int) error
 			if tries > seconds/int(backoff/time.Second) {
 				return fmt.Errorf("%d out of %d backends for the service are unhealthy", unhealthyBackends, len(service.HealthcheckStatus))
 			}
-			log.Printf("%d out of %d backends for the service are unhealthy (%d)", unhealthyBackends, len(service.HealthcheckStatus), tries * int(backoff/time.Second))
+			log.Printf("%d out of %d backends for the service are unhealthy (%d)", unhealthyBackends, len(service.HealthcheckStatus), tries*int(backoff/time.Second))
 			time.Sleep(backoff)
 		} else {
 			return nil

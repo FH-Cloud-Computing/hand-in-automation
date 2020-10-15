@@ -14,7 +14,12 @@ Feature: Sprint 1
     And I should receive the answer "OK" when querying the "/health" endpoint of the NLB
 
   Scenario: Scaling up the instance pool
-    When I kill all instances in the pool
+    When I set the instance pool to have 2 instances
+    And I kill all instances in the pool
     And I wait for 2 instances to be present
     Then all backends should be healthy after 300 seconds
     And I should receive the answer "OK" when querying the "/health" endpoint of the NLB
+
+  Scenario: Removing resources
+    When I destroy using the Terraform code
+    Then the tfstate file should be empty

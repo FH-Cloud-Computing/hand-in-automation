@@ -56,14 +56,44 @@ func main() {
 	}
 	dockerClient.NegotiateAPIVersion(ctx)
 
-	err = runTests(ctx, clientFactory, dockerClient, directory)
+	files, err := ioutil.ReadDir(directory)
 	if err != nil {
-		defer os.Exit(1)
-		runtime.Goexit()
+		log.Fatal(err)
+	}
+
+	for _, f := range files {
+		projectDirectory := path.Join(directory, f.Name())
+		logFileName := path.Join(projectDirectory, "output.log")
+		log.Printf("Checking code at %s...", projectDirectory)
+		logFile, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+		if err != nil {
+			log.Fatalf("Failed to open log file (%v)", err)
+		}
+		log.SetOutput(logFile)
+		log.Printf("Checking code at %s...", projectDirectory)
+		successFile := path.Join(projectDirectory, "success")
+		_, err = os.Stat(successFile)
+		if err == nil {
+			continue
+		}
+		err = runTests(ctx, clientFactory, dockerClient, projectDirectory, logFile)
+		if err != nil {
+			log.Printf("Run failed: %v", err)
+			log.SetOutput(os.Stdout)
+			log.Printf("Run failed: %v", err)
+		} else {
+			log.Printf("Run successful")
+			_, err := os.Create(successFile)
+			if err != nil {
+				log.Printf("Failed to create success file at %s (%v)", successFile, err)
+			}
+			log.SetOutput(os.Stdout)
+			log.Printf("Run successful")
+		}
 	}
 }
 
-func runTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerClient  *client.Client, directory string) error {
+func runTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerClient *client.Client, directory string, logFile *os.File) error {
 	err := wipeAccount(ctx, clientFactory)
 	if err != nil {
 		return err
@@ -96,25 +126,20 @@ func runTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerCl
 	userApiKey := resp.(*egoscale.APIKey).Key
 	userApiSecret := resp.(*egoscale.APIKey).Secret
 
-	err = executeTerraform(
-		ctx,
-		dockerClient,
-		directory,
-		[]string{
-			"init",
-			"-var", fmt.Sprintf("exoscale_key=%s", userApiKey),
-			"-var", fmt.Sprintf("exoscale_secret=%s", userApiSecret),
-		},
-	)
+	err = executeTerraform(ctx, dockerClient, directory, []string{
+		"init",
+		"-var", fmt.Sprintf("exoscale_key=%s", userApiKey),
+		"-var", fmt.Sprintf("exoscale_secret=%s", userApiSecret),
+	}, logFile)
 	if err != nil {
 		return err
 	}
 
 	buf := new(bytes.Buffer)
-	tc := NewTestContext(ctx, clientFactory, dockerClient, directory, userApiKey, userApiSecret)
+	tc := NewTestContext(ctx, clientFactory, dockerClient, directory, userApiKey, userApiSecret, logFile)
 	var opts = godog.Options{
-		Format:              "progress",
-		Output:              colors.Colored(buf),
+		Format: "progress",
+		Output: colors.Colored(buf),
 	}
 
 	s := &godog.TestSuite{
@@ -130,20 +155,6 @@ func runTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerCl
 		log.Printf("failed to write test log file (%v)", err)
 	}
 
-	err = executeTerraform(
-		ctx,
-		dockerClient,
-		directory,
-		[]string{
-			"destroy",
-			"-var", fmt.Sprintf("exoscale_key=%s", userApiKey),
-			"-var", fmt.Sprintf("exoscale_secret=%s", userApiSecret),
-		},
-	)
-	if err != nil {
-		return err
-	}
-
 	if status != 0 {
 		return fmt.Errorf("tests failed with status %d", status)
 	}
@@ -151,22 +162,22 @@ func runTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerCl
 	return nil
 }
 
-func executeTerraform(ctx context.Context, dockerClient *client.Client, directory string, command []string) error {
+func executeTerraform(ctx context.Context, dockerClient *client.Client, directory string, command []string, logFile *os.File) error {
 	log.Printf("executing Terraform operation %s...", command[0])
 
-	log.Printf("pulling Terraform image...", )
+	log.Printf("pulling Terraform image...")
 	pullResult, err := dockerClient.ImagePull(ctx, "janoszen/terraform", types.ImagePullOptions{})
 	if err != nil {
 		log.Printf("failed to pull Terraform container image (%v)", err)
 		return err
 	}
-	_, err = io.Copy(os.Stdout, pullResult)
+	_, err = io.Copy(logFile, pullResult)
 	if err != nil {
 		log.Printf("failed to stream pull results from Terraform image (%v)", err)
 		return err
 	}
 
-	log.Printf("creating Terraform container...", )
+	log.Printf("creating Terraform container...")
 	terraformContainer, err := dockerClient.ContainerCreate(
 		ctx,
 		&container.Config{
@@ -184,7 +195,7 @@ func executeTerraform(ctx context.Context, dockerClient *client.Client, director
 			},
 		},
 		&network.NetworkingConfig{},
-		"execute",
+		"",
 	)
 	if err != nil {
 		log.Printf("failed to create Terraform container (%v)", err)
@@ -196,7 +207,7 @@ func executeTerraform(ctx context.Context, dockerClient *client.Client, director
 			ctx,
 			terraformContainer.ID,
 			types.ContainerRemoveOptions{
-				Force:         true,
+				Force: true,
 			},
 		)
 		if err != nil {
@@ -205,13 +216,13 @@ func executeTerraform(ctx context.Context, dockerClient *client.Client, director
 			log.Printf("removed container %s.", terraformContainer.ID)
 		}
 	}()
-	log.Printf("starting Terraform container...", )
+	log.Printf("starting Terraform container...")
 	err = dockerClient.ContainerStart(ctx, terraformContainer.ID, types.ContainerStartOptions{})
 	if err != nil {
 		log.Printf("failed to start Terraform container (%v)", err)
 		return err
 	}
-	log.Printf("streaming logs from Terraform container...", )
+	log.Printf("streaming logs from Terraform container...")
 	containerOutput, err := dockerClient.ContainerLogs(ctx, terraformContainer.ID, types.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
@@ -224,9 +235,17 @@ func executeTerraform(ctx context.Context, dockerClient *client.Client, director
 	defer func() {
 		_ = containerOutput.Close()
 	}()
-	_, err = stdcopy.StdCopy(os.Stdout, os.Stderr, containerOutput)
+	logBuffer := bytes.NewBuffer(nil)
+	_, err = stdcopy.StdCopy(logBuffer, logBuffer, containerOutput)
 	if err != nil {
 		log.Printf("failed to stream logs from Terraform container (%v)", err)
+		return err
+	}
+
+	logs := logBuffer.Bytes()
+	_, err = logFile.Write(logs)
+	if err != nil {
+		log.Printf("Failed to copy Docker buffer to log file (%v)", err)
 		return err
 	}
 
@@ -237,8 +256,8 @@ func executeTerraform(ctx context.Context, dockerClient *client.Client, director
 	}
 
 	if inspect.State.ExitCode != 0 {
-		log.Printf("Terraform container exited with non-zero exit code (%d)", inspect.State.ExitCode)
-		return err
+		log.Printf("terraform %s failed:\n---\n%s\n---\n", command[0], logs)
+		return fmt.Errorf("terraform %s failed:\n---\n%s\n---\n", command[0], logBuffer.String())
 	}
 
 	log.Printf("Terraform operation %s complete.", command[0])
@@ -248,7 +267,7 @@ func executeTerraform(ctx context.Context, dockerClient *client.Client, director
 func wipeAccount(ctx context.Context, clientFactory *plugin.ClientFactory) error {
 	log.Printf("wiping Exoscale account...")
 	wiper := factory.CreateRegistry()
-	err := wiper.SetConfiguration(map[string]string{"iam-exclude-self":"1"}, false)
+	err := wiper.SetConfiguration(map[string]string{"iam-exclude-self": "1"}, false)
 	if err != nil {
 		return err
 	}
@@ -260,5 +279,3 @@ func wipeAccount(ctx context.Context, clientFactory *plugin.ClientFactory) error
 	log.Printf("wiped Exoscale account.")
 	return nil
 }
-
-
