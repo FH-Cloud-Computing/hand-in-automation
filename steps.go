@@ -38,7 +38,7 @@ func NewTestContext(ctx context.Context, clientFactory *plugin.ClientFactory, do
 	}
 }
 
-func (tc *TestContext) InitializeTestSuite(ctx *godog.TestSuiteContext) {
+func (tc *TestContext) InitializeTestSuite(_ *godog.TestSuiteContext) {
 
 }
 
