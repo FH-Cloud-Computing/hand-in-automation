@@ -16,21 +16,13 @@ import (
 )
 
 func executeTerraform(ctx context.Context, dockerClient *client.Client, directory string, command []string, logFile *os.File) error {
-	log.Printf("executing Terraform operation %s...", command[0])
-
-	log.Printf("pulling Terraform image...")
 	pullResult, err := dockerClient.ImagePull(ctx, "janoszen/terraform", types.ImagePullOptions{})
 	if err != nil {
 		log.Printf("failed to pull Terraform container image (%v)", err)
-		return err
-	}
-	_, err = io.Copy(logFile, pullResult)
-	if err != nil {
-		log.Printf("failed to stream pull results from Terraform image (%v)", err)
+		_, err = io.Copy(logFile, pullResult)
 		return err
 	}
 
-	log.Printf("creating Terraform container...")
 	terraformContainer, err := dockerClient.ContainerCreate(
 		ctx,
 		&container.Config{
@@ -55,7 +47,6 @@ func executeTerraform(ctx context.Context, dockerClient *client.Client, director
 		return err
 	}
 	defer func() {
-		log.Printf("removing container %s...", terraformContainer.ID)
 		err := dockerClient.ContainerRemove(
 			ctx,
 			terraformContainer.ID,
@@ -65,17 +56,13 @@ func executeTerraform(ctx context.Context, dockerClient *client.Client, director
 		)
 		if err != nil {
 			log.Printf("failed to remove container %s (%v)", terraformContainer.ID, err)
-		} else {
-			log.Printf("removed container %s.", terraformContainer.ID)
 		}
 	}()
-	log.Printf("starting Terraform container...")
 	err = dockerClient.ContainerStart(ctx, terraformContainer.ID, types.ContainerStartOptions{})
 	if err != nil {
 		log.Printf("failed to start Terraform container (%v)", err)
 		return err
 	}
-	log.Printf("streaming logs from Terraform container...")
 	containerOutput, err := dockerClient.ContainerLogs(ctx, terraformContainer.ID, types.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
@@ -113,7 +100,5 @@ func executeTerraform(ctx context.Context, dockerClient *client.Client, director
 		return fmt.Errorf("terraform %s failed:\n---\n%s\n---\n", command[0], logBuffer.String())
 	}
 
-	log.Printf("Terraform operation %s complete.", command[0])
 	return nil
 }
-

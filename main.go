@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"io/ioutil"
 	"log"
 	"os"
-	"path"
 	"runtime"
 
 	"github.com/docker/docker/client"
@@ -44,41 +42,12 @@ func main() {
 	}
 	dockerClient.NegotiateAPIVersion(ctx)
 
-	files, err := ioutil.ReadDir(directory)
+	logFile := os.Stdout
+	log.Printf("Checking code at %s...", directory)
+	err = runTests(ctx, clientFactory, dockerClient, directory, logFile)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	for _, f := range files {
-		projectDirectory := path.Join(directory, f.Name())
-		logFileName := path.Join(projectDirectory, "output.log")
-		log.Printf("Checking code at %s...", projectDirectory)
-		successFile := path.Join(projectDirectory, "success")
-		_, err = os.Stat(successFile)
-		if err == nil {
-			log.Printf("Submission already successful, skipping...")
-			continue
-		}
-		logFile, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
-		if err != nil {
-			log.Fatalf("Failed to open log file (%v)", err)
-		}
-		log.SetOutput(logFile)
-		log.Printf("Checking code at %s...", projectDirectory)
-		err = runTests(ctx, clientFactory, dockerClient, projectDirectory, logFile)
-		if err != nil {
-			log.Printf("Run failed: %v", err)
-			log.SetOutput(os.Stdout)
-			log.Printf("Run failed: %v", err)
-		} else {
-			log.Printf("Run successful")
-			_, err := os.Create(successFile)
-			if err != nil {
-				log.Printf("Failed to create success file at %s (%v)", successFile, err)
-			}
-			log.SetOutput(os.Stdout)
-			log.Printf("Run successful")
-		}
+		log.Printf("Run failed: %v", err)
+	} else {
+		log.Printf("Run successful")
 	}
 }
-
