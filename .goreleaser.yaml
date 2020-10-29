@@ -1,0 +1,28 @@
+builds:
+  - id:
+    binary: "hand-in-automation"
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=0
+archives:
+  - format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - features/*
+source:
+  enabled: true
+  name_template: '{{ .ProjectName }}-{{ .Version }}-source'
+dist: build
+release:
+  github:
+    owner: fh-cloud-computing
+    name: hand-in-automation
+  prerelease: auto
+  extra_files:
+    - glob: features/*
