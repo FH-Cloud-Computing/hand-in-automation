@@ -63,7 +63,10 @@ func runTests(
 
 	tc := NewTestContext(ctx, clientFactory, dockerClient, directory, userApiKey, userApiSecret, logFile)
 	var opts = godog.Options{
-		Format: "progress",
+		Format:        "progress",
+		StopOnFailure: true,
+		Strict:        true,
+		Concurrency:   1,
 	}
 
 	s := &godog.TestSuite{

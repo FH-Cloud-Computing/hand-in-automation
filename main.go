@@ -7,6 +7,7 @@ import (
 	"runtime"
 
 	"github.com/docker/docker/client"
+	"github.com/exoscale/egoscale"
 	"github.com/janoszen/exoscale-account-wiper/plugin"
 )
 
@@ -34,6 +35,9 @@ func main() {
 
 	clientFactory := plugin.NewClientFactory(apiKey, apiSecret)
 
+	log.Println("Running preflight checks...")
+
+	log.Println("Docker...")
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		log.Printf("failed to create Docker client (%v)", err)
@@ -41,6 +45,20 @@ func main() {
 		runtime.Goexit()
 	}
 	dockerClient.NegotiateAPIVersion(ctx)
+
+	if _, err := dockerClient.Ping(ctx); err != nil {
+		log.Printf("error: could not ping Docker socket (%v)\n", err)
+		os.Exit(1)
+	}
+	log.Println("check!")
+
+	log.Println("Exoscale...")
+	if _, err := clientFactory.GetExoscaleClient().RequestWithContext(ctx, egoscale.ListZones{}); err != nil {
+		log.Printf("error: could not list zones (%v)\n", err)
+		os.Exit(1)
+	}
+	log.Println("check!")
+	log.Println("Preflight checks complete, ready for takeoff.")
 
 	logFile := os.Stdout
 	log.Printf("Checking code at %s...", directory)

@@ -10,7 +10,6 @@ require (
 	github.com/exoscale/egoscale v0.33.2
 	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/janoszen/exoscale-account-wiper v0.0.0-20201021212722-2bd94674235c
-	github.com/jhoonb/archivex v0.0.0-20201016144719-6a343cdae81d
 	golang.org/x/net v0.0.0-20200822124328-c89045814202 // indirect
 	golang.org/x/sys v0.0.0-20200803210538-64077c9b5642 // indirect
 	golang.org/x/text v0.3.3 // indirect

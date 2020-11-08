@@ -34,16 +34,16 @@ type prometheusStatus = string
 
 const (
 	prometheusStatusSuccess prometheusStatus = "success"
-	prometheusStatusError   prometheusStatus = "error"
+	//prometheusStatusError   prometheusStatus = "error"
 )
 
 type prometheusResultType = string
 
 const (
-	prometheusResultTypeMatrix prometheusResultType = "matrix"
+	//prometheusResultTypeMatrix prometheusResultType = "matrix"
 	prometheusResultTypeVector prometheusResultType = "vector"
-	prometheusResultTypeScalar prometheusResultType = "scalar"
-	prometheusResultTypeString prometheusResultType = "string"
+	//prometheusResultTypeScalar prometheusResultType = "scalar"
+	//prometheusResultTypeString prometheusResultType = "string"
 )
 
 type prometheusResult struct {
@@ -131,7 +131,7 @@ func (tc *TestContext) InitializeScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(`^all backends should be healthy after (\d+) seconds$`, tc.allBackendsShouldBeHealthyAfterSeconds)
 	ctx.Step(`^there must be a monitoring server$`, tc.thereMustBeAMonitoringServer)
 	ctx.Step(`^Prometheus must be accessible on port (\d+) of the monitoring server within (\d+) seconds$`, tc.prometheusMustBeAccessible)
-	ctx.Step(`^CPU metrics of all instances in the instance pool must be visible in Prometheus on port (\\d+) after (\\d+) seconds$`, tc.cPUMetricsOfAllInstancesInTheInstancePoolMustBeVisibleInPrometheusAfterMinutes)
+	ctx.Step(`^CPU metrics of all instances in the instance pool must be visible in Prometheus on port (\d+) after (\d+) seconds$`, tc.cPUMetricsOfAllInstancesInTheInstancePoolMustBeVisibleInPrometheusAfterMinutes)
 	ctx.Step(`^I build the Dockerfile in the "([^"]*)" folder$`, tc.iBuildTheDockerfile)
 	ctx.Step(`^I start a container from the image$`, tc.iStartAContainerFromTheImage)
 	ctx.Step(`^the service discovery file must contain all instance pool IPs within (\d+) seconds$`, tc.theServiceDiscoveryFileMustContainAllInstancePoolIPsWithinSeconds)
@@ -161,7 +161,7 @@ func (tc *TestContext) InitializeScenario(ctx *godog.ScenarioContext) {
 }
 
 func (tc *TestContext) iHaveInitializedTerraform() error {
-	log.Printf("initializing Terraform...")
+	log.Printf("Running terraform init...")
 	err := executeTerraform(tc.ctx, tc.dockerClient, tc.directory, []string{
 		"init",
 		"-var", fmt.Sprintf("exoscale_key=%s", tc.userApiKey),
@@ -174,7 +174,7 @@ func (tc *TestContext) iHaveInitializedTerraform() error {
 }
 
 func (tc *TestContext) iHaveAppliedTheTerraformCode() error {
-	log.Printf("applying Terraform code...")
+	log.Printf("Running terraform apply...")
 	err := executeTerraform(tc.ctx, tc.dockerClient, tc.directory, []string{
 		"apply",
 		"-var", fmt.Sprintf("exoscale_key=%s", tc.userApiKey),
@@ -187,7 +187,7 @@ func (tc *TestContext) iHaveAppliedTheTerraformCode() error {
 }
 
 func (tc *TestContext) iHaveDestroyedUsingTheTerraformCode() error {
-	log.Printf("destroying Terraform code...")
+	log.Printf("Running terraform destroy...")
 	return executeTerraform(
 		tc.ctx, tc.dockerClient, tc.directory,
 		[]string{
@@ -734,8 +734,12 @@ func (tc *TestContext) iBuildTheDockerfile(folder string) error {
 	}
 
 	reader, writer := io.Pipe()
-	defer writer.Close()
-	defer reader.Close()
+	defer func() {
+		_ = writer.Close()
+	}()
+	defer func() {
+		_ = reader.Close()
+	}()
 
 	go func() {
 		if err := tarDirectory(directory, writer); err != nil {
