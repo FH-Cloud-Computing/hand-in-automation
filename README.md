@@ -15,6 +15,10 @@ This little tool automates the checking of project work submissions using [Docke
 
 **Note:** if you do not wish to check for the optional service discovery goal please remove or rename the `sprint2-servicediscovery.feature` file from the `features` directory.
 
+## Getting more info
+
+This tool has a command-line switch to enable more verbose logging. It can be triggered by passing the `-v` option, or the `-vv` option for increasingly verbose logs.
+
 ## How it works
 
 ### How Cucumber is used

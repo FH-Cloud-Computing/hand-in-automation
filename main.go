@@ -2,20 +2,38 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"runtime"
 
+	"github.com/containerssh/log"
+	"github.com/containerssh/log/pipeline"
 	"github.com/docker/docker/client"
 	"github.com/exoscale/egoscale"
 	"github.com/janoszen/exoscale-account-wiper/plugin"
 )
 
 func main() {
+	logger := pipeline.NewLoggerPipelineFactory(&logFormatter{}, os.Stdout).Make(log.LevelNotice)
+
+	if len(os.Args) > 1 {
+		if len(os.Args) > 2 {
+			logger.Errorf("invalid number of arguments: %d", len(os.Args))
+		}
+		switch os.Args[1] {
+		case "-h":
+			println("Usage: hand-in-automation [-v|-vv]")
+			os.Exit(0)
+		case "-v":
+			logger.SetLevel(log.LevelInfo)
+		case "-vv":
+			logger.SetLevel(log.LevelDebug)
+		}
+	}
+
 	ctx := context.Background()
 	cwd, err := os.Getwd()
 	if err != nil {
-		log.Printf("failed to get cwd (%v)", err)
+		logger.Errorf("failed to get cwd (%v)", err)
 		defer os.Exit(1)
 		runtime.Goexit()
 	}
@@ -28,44 +46,43 @@ func main() {
 	}
 
 	if apiKey == "" || apiSecret == "" {
-		log.Printf("EXOSCALE_KEY and EXOSCALE_SECRET must be provided")
+		logger.Errorf("EXOSCALE_KEY and EXOSCALE_SECRET must be provided")
 		defer os.Exit(1)
 		runtime.Goexit()
 	}
 
 	clientFactory := plugin.NewClientFactory(apiKey, apiSecret)
 
-	log.Println("Running preflight checks...")
+	logger.Infof("running preflight checks...")
 
-	log.Println("Docker...")
+	logger.Debugf("checking Docker socket...")
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
-		log.Printf("failed to create Docker client (%v)", err)
+		logger.Infof("failed to create Docker client (%v)", err)
 		defer os.Exit(1)
 		runtime.Goexit()
 	}
 	dockerClient.NegotiateAPIVersion(ctx)
 
 	if _, err := dockerClient.Ping(ctx); err != nil {
-		log.Printf("error: could not ping Docker socket (%v)\n", err)
+		logger.Errorf("error: could not ping Docker socket (%v)\n", err)
 		os.Exit(1)
 	}
-	log.Println("check!")
+	logger.Debugf("check!")
 
-	log.Println("Exoscale...")
+	logger.Debugf("checking Exoscale credentials...")
 	if _, err := clientFactory.GetExoscaleClient().RequestWithContext(ctx, egoscale.ListZones{}); err != nil {
-		log.Printf("error: could not list zones (%v)\n", err)
+		logger.Errorf("error: could not list Exoscale zones (%v)\n", err)
 		os.Exit(1)
 	}
-	log.Println("check!")
-	log.Println("Preflight checks complete, ready for takeoff.")
+	logger.Debugf("check!")
+	logger.Debugf("preflight checks complete, ready for takeoff.")
 
-	logFile := os.Stdout
-	log.Printf("Checking code at %s...", directory)
-	err = runTests(ctx, clientFactory, dockerClient, directory, logFile)
+	logger.Infof("checking code at %s, this will take a long time...", directory)
+	err = runTests(ctx, clientFactory, dockerClient, directory, logger)
 	if err != nil {
-		log.Printf("Run failed: %v", err)
+		logger.Errorf("run failed: %v", err)
 	} else {
-		log.Printf("Run successful")
+		logger.Noticef("run successful")
 	}
 }

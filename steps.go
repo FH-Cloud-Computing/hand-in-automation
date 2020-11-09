@@ -5,13 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/pkg/stdcopy"
 	"io"
 	"io/ioutil"
-	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -21,6 +16,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/containerssh/log"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/pkg/stdcopy"
 
 	"github.com/janoszen/exoscale-account-wiper/plugin"
 
@@ -74,16 +75,16 @@ type TestContext struct {
 	directory                 string
 	userApiKey                string
 	userApiSecret             string
-	logFile                   *os.File
 	imageName                 string
 	imageId                   *string
 	containerId               *string
 	serviceDiscoveryDirectory string
 	serviceDiscoveryFile      string
 	metricsPort               int
+	logger                    log.Logger
 }
 
-func NewTestContext(ctx context.Context, clientFactory *plugin.ClientFactory, dockerClient *client.Client, directory string, userApiKey string, userApiSecret string, logFile *os.File) *TestContext {
+func NewTestContext(ctx context.Context, clientFactory *plugin.ClientFactory, dockerClient *client.Client, directory string, userApiKey string, userApiSecret string, logger log.Logger) *TestContext {
 	return &TestContext{
 		ctx:           ctx,
 		clientFactory: clientFactory,
@@ -91,7 +92,7 @@ func NewTestContext(ctx context.Context, clientFactory *plugin.ClientFactory, do
 		directory:     directory,
 		userApiKey:    userApiKey,
 		userApiSecret: userApiSecret,
-		logFile:       logFile,
+		logger:        logger,
 		imageName:     "fh-hand-in-test-image",
 	}
 }
@@ -107,7 +108,7 @@ func (tc *TestContext) InitializeScenario(ctx *godog.ScenarioContext) {
 		_ = os.RemoveAll(tc.serviceDiscoveryDirectory)
 	}
 	if err := os.Mkdir(tc.serviceDiscoveryDirectory, os.ModePerm); err != nil {
-		log.Printf("failed to create service discovery data directory %s (%v)", tc.serviceDiscoveryDirectory, err)
+		tc.logger.Warningf("failed to create service discovery data directory %s (%v)", tc.serviceDiscoveryDirectory, err)
 	}
 	tc.serviceDiscoveryFile = path.Join(tc.serviceDiscoveryDirectory, "config.json")
 	tc.metricsPort = rand.Intn(65534) + 1
@@ -135,18 +136,20 @@ func (tc *TestContext) InitializeScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(`^I build the Dockerfile in the "([^"]*)" folder$`, tc.iBuildTheDockerfile)
 	ctx.Step(`^I start a container from the image$`, tc.iStartAContainerFromTheImage)
 	ctx.Step(`^the service discovery file must contain all instance pool IPs within (\d+) seconds$`, tc.theServiceDiscoveryFileMustContainAllInstancePoolIPsWithinSeconds)
+	ctx.Step(`^I should be able to stop the container with a (\d+) exit code$`, tc.stopContainer)
 
 	ctx.AfterScenario(func(sc *godog.Scenario, err error) {
-		if err := os.RemoveAll(tc.serviceDiscoveryDirectory); err != nil {
-			log.Printf("failed to remove service discovery directory (%v)", err)
-		}
 		if tc.containerId != nil {
 			if err := tc.dockerClient.ContainerRemove(tc.ctx, *tc.containerId, types.ContainerRemoveOptions{
-				RemoveVolumes: true,
-				RemoveLinks:   true,
-				Force:         true,
+				Force: true,
 			}); err != nil {
-				log.Printf("failed to remove container %s (%v)", *tc.containerId, err)
+				tc.logger.Warningf("failed to remove container %s (%v)", *tc.containerId, err)
+			}
+			tc.containerId = nil
+		}
+		if _, err := os.Stat(tc.serviceDiscoveryDirectory); err != nil {
+			if err := os.RemoveAll(tc.serviceDiscoveryDirectory); err != nil {
+				tc.logger.Warningf("failed to remove service discovery directory (%v)", err)
 			}
 		}
 		if tc.imageId != nil {
@@ -154,19 +157,20 @@ func (tc *TestContext) InitializeScenario(ctx *godog.ScenarioContext) {
 				Force:         true,
 				PruneChildren: true,
 			}); err != nil {
-				log.Printf("failed to remove container image %s (%v)", *tc.imageId, err)
+				tc.logger.Warningf("failed to remove container image %s (%v)", *tc.imageId, err)
 			}
+			tc.imageId = nil
 		}
 	})
 }
 
 func (tc *TestContext) iHaveInitializedTerraform() error {
-	log.Printf("Running terraform init...")
+	tc.logger.Infof("step:\trunning terraform init...")
 	err := executeTerraform(tc.ctx, tc.dockerClient, tc.directory, []string{
 		"init",
 		"-var", fmt.Sprintf("exoscale_key=%s", tc.userApiKey),
 		"-var", fmt.Sprintf("exoscale_secret=%s", tc.userApiSecret),
-	}, tc.logFile)
+	}, tc.logger)
 	if err != nil {
 		return err
 	}
@@ -174,12 +178,12 @@ func (tc *TestContext) iHaveInitializedTerraform() error {
 }
 
 func (tc *TestContext) iHaveAppliedTheTerraformCode() error {
-	log.Printf("Running terraform apply...")
+	tc.logger.Infof("step:\trunning terraform apply...")
 	err := executeTerraform(tc.ctx, tc.dockerClient, tc.directory, []string{
 		"apply",
 		"-var", fmt.Sprintf("exoscale_key=%s", tc.userApiKey),
 		"-var", fmt.Sprintf("exoscale_secret=%s", tc.userApiSecret),
-	}, tc.logFile)
+	}, tc.logger)
 	if err != nil {
 		return err
 	}
@@ -187,7 +191,7 @@ func (tc *TestContext) iHaveAppliedTheTerraformCode() error {
 }
 
 func (tc *TestContext) iHaveDestroyedUsingTheTerraformCode() error {
-	log.Printf("Running terraform destroy...")
+	tc.logger.Infof("step:\trunning terraform destroy...")
 	return executeTerraform(
 		tc.ctx, tc.dockerClient, tc.directory,
 		[]string{
@@ -195,12 +199,12 @@ func (tc *TestContext) iHaveDestroyedUsingTheTerraformCode() error {
 			"-var", fmt.Sprintf("exoscale_key=%s", tc.userApiKey),
 			"-var", fmt.Sprintf("exoscale_secret=%s", tc.userApiSecret),
 		},
-		tc.logFile,
+		tc.logger,
 	)
 }
 
 func (tc *TestContext) theTfstateFileShouldBeEmpty() error {
-	log.Printf("checking if tfstate file is empty...")
+	tc.logger.Infof("step:\tchecking if tfstate file is empty...")
 	directory := tc.directory
 	tfStateFile := path.Join(directory, "terraform.tfstate")
 	fileContents, err := ioutil.ReadFile(tfStateFile)
@@ -223,7 +227,7 @@ func (tc *TestContext) theTfstateFileShouldBeEmpty() error {
 }
 
 func (tc *TestContext) iSetTheInstancePoolToHaveInstances(instances int) error {
-	log.Printf("setting instance pool to %d instances...", instances)
+	tc.logger.Infof("step:\tsetting instance pool to %d instances...", instances)
 	instancePool, _, err := tc.getInstancePool()
 	if err != nil {
 		return err
@@ -242,7 +246,7 @@ func (tc *TestContext) iSetTheInstancePoolToHaveInstances(instances int) error {
 }
 
 func (tc *TestContext) iKillAllInstancesInThePool() error {
-	log.Printf("killing all instances in the instance pool...")
+	tc.logger.Infof("step:\tkilling all instances in the instance pool...")
 	instancePool, _, err := tc.getInstancePool()
 	if err != nil {
 		return err
@@ -256,24 +260,24 @@ func (tc *TestContext) iKillAllInstancesInThePool() error {
 		if vm.State == "Stopped" || vm.State == "Running" || vm.State == "Starting" {
 			instances++
 			wg.Add(1)
-			log.Printf("killing instance %s...", vm.ID)
+			tc.logger.Debugf("killing instance %s...", vm.ID)
 			go func() {
 				_, err := exoscaleClient.RequestWithContext(tc.ctx, &egoscale.DestroyVirtualMachine{
 					ID: vm.ID,
 				})
 				if err != nil {
-					log.Printf("failed to remove instance %s (%v)", vm.ID, err)
+					tc.logger.Warningf("failed to remove instance %s (%v)", vm.ID, err)
 				} else {
-					log.Printf("removed instance %s", vm.ID)
+					tc.logger.Debugf("removed instance %s", vm.ID)
 				}
 				wg.Done()
 				errChannel <- err
 			}()
 		}
 	}
-	log.Printf("waiting for %d instances to be removed...", instances)
+	tc.logger.Debugf("waiting for %d instances to be removed...", instances)
 	wg.Wait()
-	log.Printf("instance removal complete.")
+	tc.logger.Debugf("instance removal complete.")
 	for i := 0; i < instances; i++ {
 		err = <-errChannel
 		if err != nil {
@@ -284,7 +288,7 @@ func (tc *TestContext) iKillAllInstancesInThePool() error {
 }
 
 func (tc *TestContext) iShouldReceiveTheAnswerWhenQueryingTheEndpointOfTheNLB(expectedAnswer string, endpoint string) error {
-	log.Printf("querying NLB for response...")
+	tc.logger.Infof("step:\tquerying NLB for response...")
 	nlb, _, err := tc.getNLB()
 	if err != nil {
 		return err
@@ -301,12 +305,13 @@ func (tc *TestContext) iShouldReceiveTheAnswerWhenQueryingTheEndpointOfTheNLB(ex
 			if retries > maxRetries {
 				return fmt.Errorf("HTTP service failed to come up (%v)", err)
 			}
-			log.Printf("waiting for HTTP service to become available (%d)", retries*int(backoff/time.Second))
+			tc.logger.Debugf("waiting for HTTP service to become available (%d)", retries*int(backoff/time.Second))
 			time.Sleep(backoff)
 			continue
 		}
 		body, err := ioutil.ReadAll(result.Body)
 		if err != nil {
+			tc.logger.Warningf("failed to read response from NLB")
 			return err
 		}
 		if string(body) != expectedAnswer {
@@ -317,14 +322,14 @@ func (tc *TestContext) iShouldReceiveTheAnswerWhenQueryingTheEndpointOfTheNLB(ex
 }
 
 func (tc *TestContext) iWaitForInstancesToBePresent(instances int) error {
-	log.Printf("waiting for %d instances to be present...", instances)
+	tc.logger.Infof("step:\twaiting for %d instances to be present...", instances)
 	backoff := 10 * time.Second
 	retries := 0
 	retryLimit := 30
 	for {
 		instancePool, _, err := tc.getInstancePool()
 		if err != nil {
-			log.Printf("failed to fetch instance pool (%v)", err)
+			tc.logger.Warningf("failed to fetch instance pool (%v)", err)
 			time.Sleep(backoff)
 			continue
 		}
@@ -336,7 +341,7 @@ func (tc *TestContext) iWaitForInstancesToBePresent(instances int) error {
 			}
 		}
 		if runningVMs == instances {
-			log.Printf("instances present")
+			tc.logger.Debugf("instances present")
 			return nil
 		}
 
@@ -344,24 +349,23 @@ func (tc *TestContext) iWaitForInstancesToBePresent(instances int) error {
 		if retries > retryLimit {
 			return fmt.Errorf("invalid number of running instances (%d) for instance pool, expected %d", runningVMs, instances)
 		}
-		log.Printf("waiting for %d instances to be present, currently %d (%d)", instances, runningVMs, retries*int(backoff/time.Second))
+		tc.logger.Debugf("waiting for %d instances to be present, currently %d (%d)", instances, runningVMs, retries*int(backoff/time.Second))
 		time.Sleep(backoff)
 	}
 }
 
 func (tc *TestContext) iWaitForNoInstancesToBePresent() error {
-	log.Printf("waiting for no instances to be present...")
 	return tc.iWaitForInstancesToBePresent(0)
 }
 
 func (tc *TestContext) oneInstancePoolShouldExist() error {
-	log.Printf("checking if exactly one instance pool exists...")
+	tc.logger.Infof("step:\tchecking if exactly one instance pool exists...")
 	_, _, err := tc.getInstancePool()
 	return err
 }
 
 func (tc *TestContext) noInstancePoolShouldExist() error {
-	log.Printf("checking if exactly no instance pools exist...")
+	tc.logger.Infof("step:\tchecking if exactly no instance pools exist...")
 	exoscaleClient := tc.clientFactory.GetExoscaleClient()
 	resp, err := exoscaleClient.RequestWithContext(tc.ctx, egoscale.ListZones{})
 	if err != nil {
@@ -418,13 +422,13 @@ func (tc *TestContext) getInstancePool() (*egoscale.InstancePool, *egoscale.Zone
 }
 
 func (tc *TestContext) oneNLBShouldExist() error {
-	log.Printf("checking if exactly one NLB exists...")
+	tc.logger.Infof("step:\tchecking if exactly one NLB exists...")
 	_, _, err := tc.getNLB()
 	return err
 }
 
 func (tc *TestContext) noNLBShouldExist() error {
-	log.Printf("Checking if no NLBs exist...")
+	tc.logger.Infof("step:\tchecking if no NLBs exist...")
 	exoscaleClient := tc.clientFactory.GetExoscaleClient()
 	resp, err := exoscaleClient.RequestWithContext(tc.ctx, egoscale.ListZones{})
 	if err != nil {
@@ -481,6 +485,7 @@ func (tc *TestContext) getNLB() (*egoscale.NetworkLoadBalancer, *egoscale.Zone, 
 }
 
 func (tc *TestContext) theNLBShouldHaveOneService() error {
+	tc.logger.Infof("step:\tchecking if the NLB has exactly one service...")
 	_, _, _, err := tc.getNLBService()
 	return err
 }
@@ -497,7 +502,7 @@ func (tc *TestContext) getNLBService() (*egoscale.NetworkLoadBalancerService, *e
 }
 
 func (tc *TestContext) theServiceShouldListenToPort(port int) error {
-	log.Printf("checking if the service listens to port %d...", port)
+	tc.logger.Infof("step:\tchecking if the service listens to port %d...", port)
 	service, _, _, err := tc.getNLBService()
 	if err != nil {
 		return err
@@ -509,7 +514,7 @@ func (tc *TestContext) theServiceShouldListenToPort(port int) error {
 }
 
 func (tc *TestContext) allBackendsShouldBeHealthyAfterSeconds(seconds int) error {
-	log.Printf("waiting %d seconds for all backends to be healthy...", seconds)
+	tc.logger.Infof("step:\twaiting %d seconds for all backends to be healthy...", seconds)
 	tries := 0
 	var backoff = 10 * time.Second
 	for {
@@ -529,7 +534,7 @@ func (tc *TestContext) allBackendsShouldBeHealthyAfterSeconds(seconds int) error
 			if tries > seconds/int(backoff/time.Second) {
 				return fmt.Errorf("%d out of %d backends for the service are unhealthy", unhealthyBackends, len(service.HealthcheckStatus))
 			}
-			log.Printf("%d out of %d backends for the service are unhealthy (%d)", unhealthyBackends, len(service.HealthcheckStatus), tries*int(backoff/time.Second))
+			tc.logger.Debugf("%d out of %d backends for the service are unhealthy (%d)", unhealthyBackends, len(service.HealthcheckStatus), tries*int(backoff/time.Second))
 			time.Sleep(backoff)
 		} else {
 			return nil
@@ -587,13 +592,13 @@ func (tc *TestContext) getMonitoringServerIp() (string, error) {
 }
 
 func (tc *TestContext) thereMustBeAMonitoringServer() error {
-	log.Printf("checking for one monitoring server to be present...")
+	tc.logger.Debugf("step:\tchecking for one monitoring server to be present...")
 	_, err := tc.getMonitoringServerIp()
 	return err
 }
 
 func (tc *TestContext) prometheusMustBeAccessible(port int, seconds int) error {
-	log.Printf("checking if Prometheus is accessible on port %d after %d seconds...", port, seconds)
+	tc.logger.Infof("step:\tchecking if Prometheus is accessible on port %d after %d seconds...", port, seconds)
 	monitoringIp, err := tc.getMonitoringServerIp()
 	if err != nil {
 		return err
@@ -610,39 +615,39 @@ func (tc *TestContext) prometheusMustBeAccessible(port int, seconds int) error {
 		time.Sleep(time.Duration(backoff) * time.Second)
 		response, err := http.Get(monitoringUrl)
 		if err != nil {
-			log.Printf("failed to query %s (%v)", monitoringUrl, err)
+			tc.logger.Debugf("failed to query %s (%v)", monitoringUrl, err)
 			continue
 		}
 		if response.StatusCode != 200 {
-			log.Printf("failed to query %s (%v)", monitoringUrl, err)
+			tc.logger.Debugf("failed to query %s (%v)", monitoringUrl, err)
 			continue
 		}
 		body, err := ioutil.ReadAll(response.Body)
 		if err != nil {
-			log.Printf("failed to read response from %s (%v)", monitoringUrl, err)
+			tc.logger.Debugf("failed to read response from %s (%v)", monitoringUrl, err)
 			continue
 		}
 		data := &prometheusResponse{}
 		err = json.Unmarshal(body, data)
 		if err != nil {
-			log.Printf("failed to decode JSON from Prometheus (%v)", err)
+			tc.logger.Debugf("failed to decode JSON from Prometheus (%v)", err)
 			continue
 		}
 		if data.Status != prometheusStatusSuccess {
-			log.Printf("error from Prometheus during query (%v)", data.Error)
+			tc.logger.Debugf("error from Prometheus during query (%v)", data.Error)
 			continue
 		}
 		if data.Data.ResultType != prometheusResultTypeVector {
-			log.Printf("unexpected response type from Prometheus (%v)", data.Data.ResultType)
+			tc.logger.Warningf("unexpected response type from Prometheus (%v)", data.Data.ResultType)
 			continue
 		}
-		log.Printf("Prometheus is up")
+		tc.logger.Debugf("Prometheus is up")
 		return nil
 	}
 }
 
 func (tc *TestContext) cPUMetricsOfAllInstancesInTheInstancePoolMustBeVisibleInPrometheusAfterMinutes(port int, seconds int) error {
-	log.Printf("checking if all instances in the pool have their CPU metrics visible in Prometheus on port %d after %d seconds...", port, seconds)
+	tc.logger.Infof("step:\tchecking if all instances in the pool have their CPU metrics visible in Prometheus on port %d after %d seconds...", port, seconds)
 	monitoringIp, err := tc.getMonitoringServerIp()
 	if err != nil {
 		return err
@@ -659,35 +664,35 @@ func (tc *TestContext) cPUMetricsOfAllInstancesInTheInstancePoolMustBeVisibleInP
 		time.Sleep(time.Duration(backoff) * time.Second)
 		response, err := http.Get(monitoringUrl)
 		if err != nil {
-			log.Printf("failed to query %s (%v)", monitoringUrl, err)
+			tc.logger.Debugf("failed to query %s (%v)", monitoringUrl, err)
 			continue
 		}
 		if response.StatusCode != 200 {
-			log.Printf("failed to query %s (%v)", monitoringUrl, err)
+			tc.logger.Debugf("failed to query %s (%v)", monitoringUrl, err)
 			continue
 		}
 		body, err := ioutil.ReadAll(response.Body)
 		if err != nil {
-			log.Printf("failed to read response from %s (%v)", monitoringUrl, err)
+			tc.logger.Debugf("failed to read response from %s (%v)", monitoringUrl, err)
 			continue
 		}
 		data := &prometheusResponse{}
 		err = json.Unmarshal(body, data)
 		if err != nil {
-			log.Printf("failed to decode JSON from Prometheus (%v)", err)
+			tc.logger.Debugf("failed to decode JSON from Prometheus (%v)", err)
 			continue
 		}
 		if data.Status != prometheusStatusSuccess {
-			log.Printf("error from Prometheus during query (%v)", data.Error)
+			tc.logger.Debugf("error from Prometheus during query (%v)", data.Error)
 			continue
 		}
 		if data.Data.ResultType != prometheusResultTypeVector {
-			log.Printf("unexpected response type from Prometheus (%v)", data.Data.ResultType)
+			tc.logger.Debugf("unexpected response type from Prometheus (%v)", data.Data.ResultType)
 			continue
 		}
 		instancePool, _, err := tc.getInstancePool()
 		if err != nil {
-			log.Printf("failed to get instance pool (%v)", data.Data.ResultType)
+			tc.logger.Debugf("failed to get instance pool (%v)", data.Data.ResultType)
 			continue
 		}
 		metricIps := map[string]bool{}
@@ -706,7 +711,7 @@ func (tc *TestContext) cPUMetricsOfAllInstancesInTheInstancePoolMustBeVisibleInP
 			}
 		}
 		if !allIpsFound {
-			log.Printf("not all IP's are in Prometheus")
+			tc.logger.Debugf("not all IP's are in Prometheus")
 			continue
 		}
 
@@ -715,7 +720,7 @@ func (tc *TestContext) cPUMetricsOfAllInstancesInTheInstancePoolMustBeVisibleInP
 }
 
 func (tc *TestContext) iBuildTheDockerfile(folder string) error {
-	log.Printf("building the Dockerfile in the %s directory...", folder)
+	tc.logger.Infof("step:\tbuilding the Dockerfile in the %s directory...", folder)
 	directory := path.Join(tc.directory, folder)
 	stat, err := os.Stat(directory)
 	if err != nil {
@@ -743,10 +748,10 @@ func (tc *TestContext) iBuildTheDockerfile(folder string) error {
 
 	go func() {
 		if err := tarDirectory(directory, writer); err != nil {
-			log.Printf("failed to build tar for Docker build (%v)", err)
+			tc.logger.Warningf("failed to build tar for Docker build (%v)", err)
 		}
 		if err := writer.CloseWithError(io.EOF); err != nil {
-			log.Printf("failed to close writer (%v)", err)
+			tc.logger.Warningf("failed to close writer (%v)", err)
 		}
 	}()
 
@@ -769,7 +774,7 @@ func (tc *TestContext) iBuildTheDockerfile(folder string) error {
 			return fmt.Errorf("failed to decode JSON line: %s (%v)", line, err)
 		}
 		if val, ok := data["stream"]; ok {
-			log.Printf("Docker build: %s", val)
+			tc.logger.Debugf("docker:\t%s", strings.TrimSpace(val.(string)))
 		} else if val, ok := data["aux"]; ok {
 			aux := val.(map[string]interface{})
 			if val2, ok2 := aux["ID"]; ok2 {
@@ -784,17 +789,18 @@ func (tc *TestContext) iBuildTheDockerfile(folder string) error {
 			if data["id"] != nil {
 				id = data["id"].(string)
 			}
-			log.Printf("Docker build: %s:%s", status, id)
+			tc.logger.Debugf("docker build:\t%s:%s", status, id)
 		} else {
 			return fmt.Errorf("invalid response type from Docker daemon: %s", line)
 		}
 	}
 
-	log.Printf("image build completed successfully")
+	tc.logger.Debugf("image build completed successfully")
 	return nil
 }
 
 func (tc *TestContext) iStartAContainerFromTheImage() error {
+	tc.logger.Infof("step:\tstarting container...")
 	if tc.imageId == nil {
 		return fmt.Errorf("container image has not been built")
 	}
@@ -835,36 +841,29 @@ func (tc *TestContext) iStartAContainerFromTheImage() error {
 	id := containerCreate.ID
 	tc.containerId = &id
 
-	attachOptions := types.ContainerAttachOptions{
-		Logs:   true,
-		Stdin:  false,
-		Stderr: true,
-		Stdout: true,
-		Stream: true,
-	}
-	attachResult, err := tc.dockerClient.ContainerAttach(tc.ctx, *tc.containerId, attachOptions)
-	if err != nil {
-		return fmt.Errorf("failed to attach to container (%v)", err)
-	}
-
 	startOptions := types.ContainerStartOptions{}
 	err = tc.dockerClient.ContainerStart(tc.ctx, *tc.containerId, startOptions)
 	if err != nil {
 		return fmt.Errorf("failed to start container (%v)", err)
 	}
 
+	containerOutput, err := tc.dockerClient.ContainerLogs(tc.ctx, *tc.containerId, types.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Follow:     true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to stream container logs (%v)", err)
+	}
+
 	go func() {
-		_, err = stdcopy.StdCopy(tc.logFile, tc.logFile, attachResult.Reader)
-		if err != nil {
-			log.Printf("failed to stream logs from Docker (%v)", err)
+		logWriter := &logWriter{
+			logger: tc.logger,
 		}
-		inspect, err := tc.dockerClient.ContainerInspect(tc.ctx, *tc.containerId)
+		_, err = stdcopy.StdCopy(logWriter, logWriter, containerOutput)
 		if err != nil {
-			log.Printf("failed to inspect container after exit (%v)", err)
+			tc.logger.Warningf("failed to stream logs from Docker (%v)", err)
 			return
-		}
-		if inspect.State.ExitCode != 0 {
-			log.Printf("container exited with non-zero status code (%d)", inspect.State.ExitCode)
 		}
 	}()
 
@@ -878,30 +877,30 @@ type ServiceDiscoveryRecord struct {
 type ServiceDiscoveryFile []ServiceDiscoveryRecord
 
 func (tc *TestContext) theServiceDiscoveryFileMustContainAllInstancePoolIPsWithinSeconds(seconds int64) error {
+	tc.logger.Infof("step:\tchecking if all IPs in the instance pool are present in the service discovery file...")
 	startTime := time.Now()
 	maxEndTime := startTime.Add(time.Duration(seconds) * time.Second)
 	for {
-		log.Printf("checking if all IPs in the instance pool are present in the service discovery file...")
 		if time.Now().After(maxEndTime) {
-			log.Printf("timeout while waiting for service discovery")
+			tc.logger.Warningf("timeout while waiting for service discovery")
 			return fmt.Errorf("timeout while waiting for service discovery")
 		}
 		_, err := os.Stat(tc.serviceDiscoveryFile)
 		if err != nil {
-			log.Printf("service discovery file does not exist yet...")
+			tc.logger.Debugf("service discovery file does not exist yet...")
 			time.Sleep(10 * time.Second)
 			continue
 		}
 		fh, err := os.Open(tc.serviceDiscoveryFile)
 		if err != nil {
-			log.Printf("failed to open service discovey file (%v)", err)
+			tc.logger.Debugf("failed to open service discovey file (%v)", err)
 			time.Sleep(10 * time.Second)
 			continue
 		}
 		decoder := json.NewDecoder(fh)
 		decoded := &ServiceDiscoveryFile{}
 		if err := decoder.Decode(decoded); err != nil {
-			log.Printf("failed to decode service discovery file (%v)", err)
+			tc.logger.Debugf("failed to decode service discovery file (%v)", err)
 			time.Sleep(10 * time.Second)
 			continue
 		}
@@ -915,11 +914,12 @@ func (tc *TestContext) theServiceDiscoveryFileMustContainAllInstancePoolIPsWithi
 
 		instancePoolIps, err := tc.getInstancePoolIps()
 		if err != nil {
-			log.Printf("failed to fetch IPs from instance pool (%v)", err)
+			tc.logger.Warningf("failed to fetch IPs from instance pool (%v)", err)
+			continue
 		}
 
 		if len(decodedTargets) != len(instancePoolIps) {
-			log.Printf("Number targets in the service discovery file (%d) does not match IPs in the instance pool (%d)", len(decodedTargets), len(instancePoolIps))
+			tc.logger.Debugf("number targets in the service discovery file (%d) does not match IPs in the instance pool (%d)", len(decodedTargets), len(instancePoolIps))
 			time.Sleep(10 * time.Second)
 			continue
 		}
@@ -928,7 +928,7 @@ func (tc *TestContext) theServiceDiscoveryFileMustContainAllInstancePoolIPsWithi
 		for _, ip := range instancePoolIps {
 			target := fmt.Sprintf("%s:%d", ip.String(), tc.metricsPort)
 			if _, ok := decodedTargets[target]; !ok {
-				log.Printf("expected target %s is not in the service discovery file", target)
+				tc.logger.Debugf("expected target %s is not in the service discovery file", target)
 				allIpsPresent = false
 			}
 		}
@@ -936,7 +936,7 @@ func (tc *TestContext) theServiceDiscoveryFileMustContainAllInstancePoolIPsWithi
 			time.Sleep(10 * time.Second)
 			continue
 		}
-		log.Printf("all IPs are present in the service discovery file")
+		tc.logger.Debugf("all IPs are present in the service discovery file")
 		return nil
 	}
 }
@@ -961,4 +961,38 @@ func (tc *TestContext) getInstancePoolIps() ([]net.IP, error) {
 		ips = append(ips, ip)
 	}
 	return ips, nil
+}
+
+func (tc *TestContext) stopContainer(exitCode int) error {
+	tc.logger.Infof("step:\tchecking if the container can be normally stopped...")
+	if tc.containerId == nil {
+		return fmt.Errorf("container not running")
+	}
+	inspect, err := tc.dockerClient.ContainerInspect(tc.ctx, *tc.containerId)
+	if err != nil {
+		tc.logger.Warningf("failed to inspect container (%v)", err)
+		return err
+	}
+	if inspect.State == nil || !inspect.State.Running {
+		tc.logger.Warningf("container is not running")
+		return fmt.Errorf("container is not running")
+	}
+	if err := tc.dockerClient.ContainerStop(tc.ctx, *tc.containerId, nil); err != nil {
+		tc.logger.Warningf("failed to stop container (%v)", err)
+		return fmt.Errorf("failed to stop container (%v)", err)
+	}
+	inspect, err = tc.dockerClient.ContainerInspect(tc.ctx, *tc.containerId)
+	if err != nil {
+		tc.logger.Warningf("failed to inspect container (%v)", err)
+		return err
+	}
+	if inspect.State.Running != false {
+		tc.logger.Warningf("container still running")
+		return fmt.Errorf("container still running")
+	}
+	if inspect.State.ExitCode != exitCode {
+		tc.logger.Warningf("container exited with unexpected exit code (%d)", inspect.State.ExitCode)
+		return fmt.Errorf("container exited with unexpected exit code (%d)", inspect.State.ExitCode)
+	}
+	return nil
 }
