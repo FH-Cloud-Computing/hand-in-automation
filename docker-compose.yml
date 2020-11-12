@@ -2,13 +2,27 @@
 version: '3.2'
 services:
   traefik:
-    # The official v2 Traefik docker image
     image: traefik:v2.3
-    # Enables the web UI and tells Traefik to listen to docker
-    command: --api.insecure=true --providers.docker
+    command: --log.level=DEBUG --providers.docker --entrypoints.web.address=:80 --entrypoints.web.http.redirections.entryPoint.to=websecure --entrypoints.web.http.redirections.entryPoint.scheme=https --entrypoints.web.http.redirections.entrypoint.permanent=true --entrypoints.websecure.address=:443 --certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web --certificatesresolvers.myresolver.acme.email=janos@pasztor.at --certificatesresolvers.myresolver.acme.storage=/srv/acme.json
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      # So that Traefik can listen to the Docker events
+      - /srv:/srv
       - /var/run/docker.sock:/var/run/docker.sock
+  handin:
+    image: janoszen/fh-cloudcomputing-handin-automation
+    environment:
+      EXOSCALE_KEY: ${EXOSCALE_KEY}
+      EXOSCALE_SECRET: ${EXOSCALE_SECRET}
+      LOGDIR: /logs
+      PROJECTDIR: /projects
+    labels:
+      - traefik.http.routers.handin.rule=Host(`handin.pasztor.at`)
+      - traefik.http.routers.handin.tls=true
+      - traefik.http.routers.handin.tls.certresolver=myresolver
+      - traefik.http.services.handin.loadbalancer.server.port=8090
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /projects:/projects
+      - /var/log/handin:/logs
