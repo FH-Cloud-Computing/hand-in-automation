@@ -36,6 +36,8 @@ dockers:
     skip_push: auto
     image_templates:
       - "janoszen/fh-cloudcomputing-handin-automation"
+    extra_files:
+      - features
 dist: build
 release:
   github:
