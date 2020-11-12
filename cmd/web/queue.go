@@ -164,6 +164,8 @@ func (q *queue) run() {
 			logger.Warningf("failed to remove project directory %s (%v)", item.directory, err)
 		}
 		item.status = "finished"
+		item.username = ""
+		item.password = ""
 
 		q.lock.Lock()
 		q.queue = q.queue[1:]
