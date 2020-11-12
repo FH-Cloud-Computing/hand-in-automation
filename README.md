@@ -11,7 +11,7 @@ This little tool automates the checking of project work submissions using [Docke
 3. Unpack all files to a directory.
 4. Set the `EXOSCALE_KEY`, `EXOSCALE_SECRET` environment variables.
 5. Set the `DIRECTORY` variable to point to the directory with your source code.
-6. Run the `hand-in-automation` program from its directory. 
+6. Run the `hand-in-automation` program from its directory, optionally with the `-v` or `-vv` parameters to get a more detailed output.
 
 **Note:** if you do not wish to check for the optional service discovery goal please remove or rename the `sprint2-servicediscovery.feature` file from the `features` directory.
 
