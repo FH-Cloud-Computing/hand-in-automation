@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -765,34 +764,9 @@ func (tc *TestContext) iBuildTheDockerfile(folder string) error {
 	}
 	defer func() { _ = response.Body.Close() }()
 
-	scanner := bufio.NewScanner(response.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		decoder := json.NewDecoder(strings.NewReader(line))
-		data := make(map[string]interface{})
-		if err := decoder.Decode(&data); err != nil {
-			return fmt.Errorf("failed to decode JSON line: %s (%v)", line, err)
-		}
-		if val, ok := data["stream"]; ok {
-			tc.logger.Debugf("docker:\t%s", strings.TrimSpace(val.(string)))
-		} else if val, ok := data["aux"]; ok {
-			aux := val.(map[string]interface{})
-			if val2, ok2 := aux["ID"]; ok2 {
-				id := val2.(string)
-				tc.imageId = &id
-			} else {
-				return fmt.Errorf("invalid response type from Docker daemon: %s", line)
-			}
-		} else if val, ok := data["status"]; ok {
-			status := val.(string)
-			id := ""
-			if data["id"] != nil {
-				id = data["id"].(string)
-			}
-			tc.logger.Debugf("docker build:\t%s:%s", status, id)
-		} else {
-			return fmt.Errorf("invalid response type from Docker daemon: %s", line)
-		}
+	tc.imageId, err = dockerToLogger(response.Body, tc.logger)
+	if err != nil {
+		return err
 	}
 
 	tc.logger.Debugf("image build completed successfully")
@@ -887,20 +861,20 @@ func (tc *TestContext) theServiceDiscoveryFileMustContainAllInstancePoolIPsWithi
 		}
 		_, err := os.Stat(tc.serviceDiscoveryFile)
 		if err != nil {
-			tc.logger.Debugf("service discovery file does not exist yet...")
+			tc.logger.Debugf("service discovery file %s does not exist yet...", tc.serviceDiscoveryFile)
 			time.Sleep(10 * time.Second)
 			continue
 		}
 		fh, err := os.Open(tc.serviceDiscoveryFile)
 		if err != nil {
-			tc.logger.Debugf("failed to open service discovey file (%v)", err)
+			tc.logger.Debugf("failed to open service discovey file %s (%v)", tc.serviceDiscoveryFile, err)
 			time.Sleep(10 * time.Second)
 			continue
 		}
 		decoder := json.NewDecoder(fh)
 		decoded := &ServiceDiscoveryFile{}
 		if err := decoder.Decode(decoded); err != nil {
-			tc.logger.Debugf("failed to decode service discovery file (%v)", err)
+			tc.logger.Debugf("failed to decode service discovery file %s (%v)", tc.serviceDiscoveryFile, err)
 			time.Sleep(10 * time.Second)
 			continue
 		}

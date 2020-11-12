@@ -3,11 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
-	"strings"
 
 	"github.com/containerssh/log"
 	"github.com/docker/docker/api/types"
@@ -18,42 +15,7 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 )
 
-func readToLogger(input io.ReadCloser, logger log.Logger) error {
-	b := make([]byte, 1)
-	var buf bytes.Buffer
-	for {
-		n, err := input.Read(b)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return err
-		}
-		if n == 0 {
-			break
-		}
-		if bytes.Equal(b, []byte("\n")) {
-			line := strings.TrimSpace(buf.String())
-			logger.Debugf("terraform:\t%s", line)
-			buf = bytes.Buffer{}
-		} else {
-			buf.Write(b)
-		}
-	}
-	if buf.Len() > 0 {
-		line := strings.TrimSpace(buf.String())
-		logger.Debugf("terraform:\t%s", line)
-	}
-	return nil
-}
-
 func executeTerraform(ctx context.Context, dockerClient *client.Client, directory string, command []string, logger log.Logger) error {
-	pullResult, err := dockerClient.ImagePull(ctx, "janoszen/terraform", types.ImagePullOptions{})
-	if err != nil {
-		logger.Warningf("failed to pull Terraform container image (%v)", err)
-		return readToLogger(pullResult, logger)
-	}
-
 	terraformContainer, err := dockerClient.ContainerCreate(
 		ctx,
 		&container.Config{

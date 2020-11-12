@@ -7,6 +7,7 @@ import (
 
 	"github.com/containerssh/log"
 	"github.com/containerssh/log/pipeline"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
 	"github.com/exoscale/egoscale"
 	"github.com/janoszen/exoscale-account-wiper/plugin"
@@ -66,6 +67,18 @@ func main() {
 
 	if _, err := dockerClient.Ping(ctx); err != nil {
 		logger.Errorf("error: could not ping Docker socket (%v)\n", err)
+		os.Exit(1)
+	}
+	logger.Debugf("check!")
+
+	logger.Debugf("pulling Terraform execution image...")
+	pullResult, err := dockerClient.ImagePull(ctx, "docker.io/janoszen/terraform", types.ImagePullOptions{})
+	if err != nil {
+		logger.Errorf("error: could not pull Terraform image (%v)\n", err)
+		os.Exit(1)
+	}
+	if _, err := dockerToLogger(pullResult, logger); err != nil {
+		logger.Errorf("error: could not pull Terraform image (%v)\n", err)
 		os.Exit(1)
 	}
 	logger.Debugf("check!")
