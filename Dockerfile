@@ -1,0 +1,4 @@
+FROM alpine
+COPY web /
+ENTRYPOINT ["/web"]
+EXPOSE 8090

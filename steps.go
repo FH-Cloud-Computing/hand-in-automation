@@ -1,4 +1,4 @@
-package main
+package handin
 
 import (
 	"context"
@@ -28,6 +28,8 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
 	"github.com/exoscale/egoscale"
+
+	"github.com/FH-Cloud-Computing/hand-in-automation/logger"
 )
 
 type prometheusStatus = string
@@ -764,7 +766,7 @@ func (tc *TestContext) iBuildTheDockerfile(folder string) error {
 	}
 	defer func() { _ = response.Body.Close() }()
 
-	tc.imageId, err = dockerToLogger(response.Body, tc.logger)
+	tc.imageId, err = DockerToLogger(response.Body, tc.logger)
 	if err != nil {
 		return err
 	}
@@ -831,8 +833,8 @@ func (tc *TestContext) iStartAContainerFromTheImage() error {
 	}
 
 	go func() {
-		logWriter := &logWriter{
-			logger: tc.logger,
+		logWriter := &logger.LogWriter{
+			Logger: tc.logger,
 		}
 		_, err = stdcopy.StdCopy(logWriter, logWriter, containerOutput)
 		if err != nil {

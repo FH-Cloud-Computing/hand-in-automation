@@ -1,4 +1,4 @@
-package main
+package handin
 
 import (
 	"bytes"
@@ -15,10 +15,12 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/exoscale/egoscale"
 	"github.com/janoszen/exoscale-account-wiper/plugin"
+
+	log2 "github.com/FH-Cloud-Computing/hand-in-automation/logger"
 )
 
-func runTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerClient *client.Client, directory string, logger log.Logger) error {
-	goLogger := &logWriter{logger: logger}
+func RunTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerClient *client.Client, directory string, logger log.Logger) error {
+	goLogger := &log2.LogWriter{Logger: logger}
 	goLog.SetOutput(goLogger)
 	originalFlags := goLog.Flags()
 	goLog.SetFlags(0)
@@ -57,6 +59,7 @@ func runTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerCl
 	userApiKey := resp.(*egoscale.APIKey).Key
 	userApiSecret := resp.(*egoscale.APIKey).Secret
 
+	logger.Infof("running terraform init...")
 	err = executeTerraform(ctx, dockerClient, directory, []string{
 		"init",
 		"-var", fmt.Sprintf("exoscale_key=%s", userApiKey),

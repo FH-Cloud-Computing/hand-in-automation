@@ -1,4 +1,4 @@
-package main
+package logger
 
 import (
 	"bytes"
@@ -11,10 +11,10 @@ import (
 	"github.com/fatih/color"
 )
 
-type logFormatter struct {
+type LogFormatter struct {
 }
 
-func (l logFormatter) Format(level log.Level, message string) []byte {
+func (l LogFormatter) Format(level log.Level, message string) []byte {
 	var buf bytes.Buffer
 
 	color.NoColor = false
@@ -36,26 +36,26 @@ func (l logFormatter) Format(level log.Level, message string) []byte {
 	return buf.Bytes()
 }
 
-func (l logFormatter) FormatData(level log.Level, data interface{}) []byte {
+func (l LogFormatter) FormatData(level log.Level, data interface{}) []byte {
 	return l.Format(level, fmt.Sprintf("%v", data))
 }
 
-type logWriter struct {
-	logger log.Logger
-	buf    bytes.Buffer
+type LogWriter struct {
+	Logger log.Logger
+	Buf    bytes.Buffer
 }
 
-func (l logWriter) Write(p []byte) (n int, err error) {
+func (l LogWriter) Write(p []byte) (n int, err error) {
 	for _, b := range p {
 		if bytes.Equal([]byte{b}, []byte("\n")) {
-			l.logger.Debug(strings.TrimSpace(l.buf.String()))
-			l.buf.Reset()
+			l.Logger.Debug(strings.TrimSpace(l.Buf.String()))
+			l.Buf.Reset()
 		} else {
-			l.buf.Write([]byte{b})
+			l.Buf.Write([]byte{b})
 		}
 	}
-	if l.buf.Len() > 0 {
-		l.logger.Debug(strings.TrimSpace(l.buf.String()))
+	if l.Buf.Len() > 0 {
+		l.Logger.Debug(strings.TrimSpace(l.Buf.String()))
 	}
 	return len(p), nil
 }

@@ -1,6 +1,7 @@
 builds:
-  - id:
-    binary: "hand-in-automation"
+  - id: cli
+    binary: "cli"
+    dir: cmd/cli/
     goos:
       - linux
       - darwin
@@ -9,15 +10,32 @@ builds:
       - amd64
     env:
       - CGO_ENABLED=0
+  - id: web
+    binary: "web"
+    dir: cmd/web/
+    goos:
+      - linux
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=0
 archives:
-  - format_overrides:
+  - builds:
+      - cli
+    format_overrides:
       - goos: windows
         format: zip
     files:
       - features/*
-source:
-  enabled: true
-  name_template: '{{ .ProjectName }}-{{ .Version }}-source'
+dockers:
+  - goos: linux
+    goarch: amd64
+    binaries:
+      - web
+    dockerfile: Dockerfile
+    skip_push: auto
+    image_templates:
+      - "janoszen/fh-cloudcomputing-handin-automation"
 dist: build
 release:
   github:

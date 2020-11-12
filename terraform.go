@@ -1,4 +1,4 @@
-package main
+package handin
 
 import (
 	"bytes"
@@ -75,7 +75,7 @@ func executeTerraform(ctx context.Context, dockerClient *client.Client, director
 		return err
 	}
 
-	if err := readToLogger(ioutil.NopCloser(logBuffer), logger); err != nil {
+	if err := ReadToLogger(ioutil.NopCloser(logBuffer), logger); err != nil {
 		return err
 	}
 

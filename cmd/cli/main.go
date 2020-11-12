@@ -11,10 +11,13 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/exoscale/egoscale"
 	"github.com/janoszen/exoscale-account-wiper/plugin"
+
+	handin "github.com/FH-Cloud-Computing/hand-in-automation"
+	log2 "github.com/FH-Cloud-Computing/hand-in-automation/logger"
 )
 
 func main() {
-	logger := pipeline.NewLoggerPipelineFactory(&logFormatter{}, os.Stdout).Make(log.LevelNotice)
+	logger := pipeline.NewLoggerPipelineFactory(&log2.LogFormatter{}, os.Stdout).Make(log.LevelNotice)
 
 	if len(os.Args) > 1 {
 		if len(os.Args) > 2 {
@@ -59,7 +62,7 @@ func main() {
 	logger.Debugf("checking Docker socket...")
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
-		logger.Infof("failed to create Docker client (%v)", err)
+		logger.Errorf("failed to create Docker client (%v)", err)
 		defer os.Exit(1)
 		runtime.Goexit()
 	}
@@ -77,7 +80,7 @@ func main() {
 		logger.Errorf("error: could not pull Terraform image (%v)\n", err)
 		os.Exit(1)
 	}
-	if _, err := dockerToLogger(pullResult, logger); err != nil {
+	if _, err := handin.DockerToLogger(pullResult, logger); err != nil {
 		logger.Errorf("error: could not pull Terraform image (%v)\n", err)
 		os.Exit(1)
 	}
@@ -92,7 +95,7 @@ func main() {
 	logger.Debugf("preflight checks complete, ready for takeoff.")
 
 	logger.Infof("checking code at %s, this will take a long time...", directory)
-	err = runTests(ctx, clientFactory, dockerClient, directory, logger)
+	err = handin.RunTests(ctx, clientFactory, dockerClient, directory, logger)
 	if err != nil {
 		logger.Errorf("run failed: %v", err)
 	} else {

@@ -1,4 +1,4 @@
-package main
+package handin
 
 import (
 	"bufio"
@@ -12,7 +12,7 @@ import (
 	"github.com/containerssh/log"
 )
 
-func dockerToLogger(input io.ReadCloser, logger log.Logger) (imageId *string, err error) {
+func DockerToLogger(input io.ReadCloser, logger log.Logger) (imageId *string, err error) {
 	scanner := bufio.NewScanner(input)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -45,7 +45,7 @@ func dockerToLogger(input io.ReadCloser, logger log.Logger) (imageId *string, er
 	return imageId, nil
 }
 
-func readToLogger(input io.ReadCloser, logger log.Logger) error {
+func ReadToLogger(input io.ReadCloser, logger log.Logger) error {
 	b := make([]byte, 1)
 	var buf bytes.Buffer
 	for {

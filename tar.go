@@ -1,4 +1,4 @@
-package main
+package handin
 
 import (
 	"archive/tar"
