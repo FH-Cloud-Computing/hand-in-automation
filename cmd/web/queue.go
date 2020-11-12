@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"sync"
 
@@ -202,6 +203,18 @@ func (q *queue) runEntry(item *queueEntry, logger log.Logger) {
 
 	item.username = ""
 	item.password = ""
+
+	if runtime.GOOS != "windows" {
+		if err := filepath.Walk(item.directory, func(name string, info os.FileInfo, err error) error {
+			if err == nil {
+				err = os.Chown(name, 1000, 1000)
+			}
+			return err
+		}); err != nil {
+			logger.Warningf("failed to chown directory (%v)", err)
+			return
+		}
+	}
 
 	logger.Infof("running tests...")
 	if err := handin.RunTests(
