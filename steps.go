@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -858,21 +859,25 @@ func (tc *TestContext) theServiceDiscoveryFileMustContainAllInstancePoolIPsWithi
 	maxEndTime := startTime.Add(time.Duration(seconds) * time.Second)
 	for {
 		if time.Now().After(maxEndTime) {
-			tc.logger.Warningf("timeout while waiting for service discovery")
+			tc.logger.Warningf("no or invalid service discovery found within %d seconds, timeout", seconds)
 			return fmt.Errorf("timeout while waiting for service discovery")
 		}
+		tc.logger.Debugf("running checks on service discovery file %s...", tc.serviceDiscoveryFile)
+		tc.logger.Debugf("checking if the service discovery file is present at %s...", tc.serviceDiscoveryFile)
 		_, err := os.Stat(tc.serviceDiscoveryFile)
 		if err != nil {
-			tc.logger.Debugf("service discovery file %s does not exist yet...", tc.serviceDiscoveryFile)
+			tc.logger.Debugf("service discovery file %s does not exist yet", tc.serviceDiscoveryFile)
 			time.Sleep(10 * time.Second)
 			continue
 		}
+		tc.logger.Debugf("opening service discovery file...")
 		fh, err := os.Open(tc.serviceDiscoveryFile)
 		if err != nil {
-			tc.logger.Debugf("failed to open service discovey file %s (%v)", tc.serviceDiscoveryFile, err)
+			tc.logger.Debugf("failed to open service discovery file %s (%v)", tc.serviceDiscoveryFile, err)
 			time.Sleep(10 * time.Second)
 			continue
 		}
+		tc.logger.Debugf("decoding JSON contents...")
 		decoder := json.NewDecoder(fh)
 		decoded := &ServiceDiscoveryFile{}
 		if err := decoder.Decode(decoded); err != nil {
@@ -881,9 +886,11 @@ func (tc *TestContext) theServiceDiscoveryFileMustContainAllInstancePoolIPsWithi
 			continue
 		}
 
+		var foundTargets []string
 		var decodedTargets = make(map[string]bool)
 		for _, record := range *decoded {
 			for _, entry := range record.Targets {
+				foundTargets = append(foundTargets, entry)
 				decodedTargets[entry] = true
 			}
 		}
@@ -893,6 +900,21 @@ func (tc *TestContext) theServiceDiscoveryFileMustContainAllInstancePoolIPsWithi
 			tc.logger.Warningf("failed to fetch IPs from instance pool (%v)", err)
 			continue
 		}
+
+		var expectedTargets []string
+		for _, ip := range instancePoolIps {
+			expectedTargets = append(expectedTargets, fmt.Sprintf("%s:%d", ip.String(), tc.metricsPort))
+		}
+
+		sort.SliceStable(foundTargets, func(i, j int) bool {
+			return foundTargets[i]>foundTargets[j]
+		})
+		sort.SliceStable(expectedTargets, func(i, j int) bool {
+			return expectedTargets[i]>expectedTargets[j]
+		})
+
+		tc.logger.Debugf("expecting the following targets: %v", expectedTargets)
+		tc.logger.Debugf("found the following targets: %v", foundTargets)
 
 		if len(decodedTargets) != len(instancePoolIps) {
 			tc.logger.Debugf("number targets in the service discovery file (%d) does not match IPs in the instance pool (%d)", len(decodedTargets), len(instancePoolIps))
@@ -909,6 +931,7 @@ func (tc *TestContext) theServiceDiscoveryFileMustContainAllInstancePoolIPsWithi
 			}
 		}
 		if !allIpsPresent {
+			tc.logger.Debugf("not all IPs are present, retrying in 10 seconds...")
 			time.Sleep(10 * time.Second)
 			continue
 		}

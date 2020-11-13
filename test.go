@@ -20,7 +20,7 @@ import (
 )
 
 func RunTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerClient *client.Client, directory string, logger log.Logger) error {
-	goLogger := &log2.LogWriter{Logger: logger}
+	goLogger := &log2.LogWriter{Prefix: "result:", Logger: logger}
 	goLog.SetOutput(goLogger)
 	originalFlags := goLog.Flags()
 	goLog.SetFlags(0)

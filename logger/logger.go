@@ -41,21 +41,26 @@ func (l LogFormatter) FormatData(level log.Level, data interface{}) []byte {
 }
 
 type LogWriter struct {
+	Prefix string
 	Logger log.Logger
 	Buf    bytes.Buffer
 }
 
 func (l LogWriter) Write(p []byte) (n int, err error) {
+	prefix := l.Prefix
+	if prefix == "" {
+		prefix = "container:"
+	}
 	for _, b := range p {
 		if bytes.Equal([]byte{b}, []byte("\n")) {
-			l.Logger.Debug(strings.TrimSpace(l.Buf.String()))
+			l.Logger.Debug(fmt.Sprintf("%s\t%s", prefix, strings.TrimSpace(l.Buf.String())))
 			l.Buf.Reset()
 		} else {
 			l.Buf.Write([]byte{b})
 		}
 	}
 	if l.Buf.Len() > 0 {
-		l.Logger.Debug(strings.TrimSpace(l.Buf.String()))
+		l.Logger.Debug(fmt.Sprintf("%s\t%s", prefix, strings.TrimSpace(l.Buf.String())))
 	}
 	return len(p), nil
 }
