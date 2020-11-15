@@ -107,7 +107,9 @@ func (tc *TestContext) InitializeScenario(ctx *godog.ScenarioContext) {
 	tempDir := os.TempDir()
 	tc.serviceDiscoveryDirectory = path.Join(tempDir, "service-discovery")
 	if _, err := os.Stat(tc.serviceDiscoveryDirectory); err == nil {
-		_ = os.RemoveAll(tc.serviceDiscoveryDirectory)
+		if err = os.RemoveAll(tc.serviceDiscoveryDirectory); err != nil {
+			tc.logger.Warningf("failed to remove previous service directory data directory %s (%v)", tc.serviceDiscoveryDirectory, err)
+		}
 	}
 	if err := os.Mkdir(tc.serviceDiscoveryDirectory, os.ModePerm); err != nil {
 		tc.logger.Warningf("failed to create service discovery data directory %s (%v)", tc.serviceDiscoveryDirectory, err)
@@ -557,14 +559,14 @@ func (tc *TestContext) getMonitoringServerIp() (string, error) {
 	for _, key := range vms {
 		vm := key.(*egoscale.VirtualMachine)
 		for _, nic := range vm.Nic {
-			if nic.IsDefault {
+			if nic.IsDefault && nic.IPAddress != nil {
 				ips[nic.IPAddress.String()] = true
 			}
 		}
 	}
 
 	instancePool, _, err := tc.getInstancePool()
-	foundIp := ""
+	var nonPoolIps []string
 	if err == nil {
 		instancePoolIps := map[string]bool{}
 		for _, vm := range instancePool.VirtualMachines {
@@ -576,10 +578,7 @@ func (tc *TestContext) getMonitoringServerIp() (string, error) {
 		}
 		for ip := range ips {
 			if _, ok := instancePoolIps[ip]; !ok {
-				if foundIp != "" {
-					return "", fmt.Errorf("too many non-instancepool VM's running: %d", len(ips))
-				}
-				foundIp = ip
+				nonPoolIps = append(nonPoolIps, ip)
 			}
 		}
 	} else {
@@ -587,10 +586,14 @@ func (tc *TestContext) getMonitoringServerIp() (string, error) {
 			return "", fmt.Errorf("too many non-instancepool VM's running: %d", len(ips))
 		}
 	}
-	if foundIp == "" {
+	if len(nonPoolIps) > 1 {
+		tc.logger.Debugf("found the following non-instancepool VM IPs: %v", nonPoolIps)
+		return "", fmt.Errorf("too many non-instancepool VM's running: %d", len(nonPoolIps))
+	}
+	if len(nonPoolIps) == 0 {
 		return "", fmt.Errorf("monitoring server not running")
 	}
-	return foundIp, nil
+	return nonPoolIps[0], nil
 }
 
 func (tc *TestContext) thereMustBeAMonitoringServer() error {
@@ -697,26 +700,38 @@ func (tc *TestContext) cPUMetricsOfAllInstancesInTheInstancePoolMustBeVisibleInP
 			tc.logger.Debugf("failed to get instance pool (%v)", data.Data.ResultType)
 			continue
 		}
+
+		var instancePoolIps []string
+		var metricIpsSliced []string
 		metricIps := map[string]bool{}
 		for _, record := range data.Data.Result {
 			parts := strings.SplitN(record.Metric.Instance, ":", 2)
 			metricIps[parts[0]] = true
 		}
+		for k := range metricIps {
+			metricIpsSliced = append(metricIpsSliced, k)
+		}
 		allIpsFound := true
 		for _, vm := range instancePool.VirtualMachines {
 			for _, nic := range vm.Nic {
-				if nic.IsDefault {
+				if nic.IsDefault && nic.IPAddress != nil {
+					instancePoolIps = append(instancePoolIps, nic.IPAddress.String())
 					if _, ok := metricIps[nic.IPAddress.String()]; !ok {
 						allIpsFound = false
 					}
 				}
 			}
 		}
+
+		tc.logger.Debugf("expecting following targets (vms in the instancepool): %v", instancePoolIps)
+		tc.logger.Debugf("found the following targets (monitored by Prometheus): %v", metricIpsSliced)
+
 		if !allIpsFound {
 			tc.logger.Debugf("not all IP's are in Prometheus")
 			continue
 		}
 
+		tc.logger.Debugf("all IP's found in Prometheus")
 		return nil
 	}
 }
