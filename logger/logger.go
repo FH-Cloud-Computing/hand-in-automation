@@ -23,7 +23,7 @@ func (l LogFormatter) Format(level log.Level, message string) []byte {
 	line := fmt.Sprintf("%s\t%v\n", levelString, stripansi.Strip(message))
 	switch level {
 	case log.LevelDebug:
-		_, _ = color.New(color.FgWhite).Fprint(color.Output, line)
+		_, _ = color.New(color.FgWhite).Fprint(&buf, line)
 	case log.LevelInfo:
 		_, _ = color.New(color.FgCyan).Fprint(&buf, line)
 	case log.LevelNotice:

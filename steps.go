@@ -84,6 +84,9 @@ type TestContext struct {
 	serviceDiscoveryFile      string
 	metricsPort               int
 	logger                    log.Logger
+	scenariosSuccessful       []string
+	optionalScenariosFailed   []string
+	scenariosFailed           []string
 }
 
 func NewTestContext(ctx context.Context, clientFactory *plugin.ClientFactory, dockerClient *client.Client, directory string, userApiKey string, userApiSecret string, logger log.Logger) *TestContext {
@@ -104,13 +107,45 @@ func (tc *TestContext) InitializeTestSuite(_ *godog.TestSuiteContext) {
 }
 
 func (tc *TestContext) InitializeScenario(ctx *godog.ScenarioContext) {
+	ctx.BeforeScenario(func(sc *godog.Scenario) {
+		tc.logger.Debugf("executing scenario \"%s\"...", sc.Name)
+	})
+	ctx.AfterScenario(func(sc *godog.Scenario, err error) {
+		if err != nil {
+			if strings.Contains(sc.Name, "[optional]") {
+				tc.optionalScenariosFailed = append(tc.optionalScenariosFailed, sc.Name)
+			} else {
+				tc.scenariosFailed = append(tc.scenariosFailed, sc.Name)
+			}
+		} else {
+			tc.scenariosSuccessful = append(tc.scenariosSuccessful, sc.Name)
+		}
+	})
+	ctx.BeforeStep(func(st *godog.Step) {
+		tc.logger.Debugf("executing step \"%s\"...", st.Text)
+	})
+	ctx.AfterStep(func(st *godog.Step, err error) {
+		if err != nil {
+			tc.logger.Debugf("step failed: \"%s\" (%v)", st.Text, err)
+		} else {
+			tc.logger.Debugf("step successful: \"%s\"", st.Text)
+		}
+	})
 	tempDir := os.TempDir()
 	tc.serviceDiscoveryDirectory = path.Join(tempDir, "service-discovery")
 	if _, err := os.Stat(tc.serviceDiscoveryDirectory); err == nil {
-		_ = os.RemoveAll(tc.serviceDiscoveryDirectory)
+		if err := os.RemoveAll(tc.serviceDiscoveryDirectory); err != nil {
+			tc.logger.Warningf(
+				"failed to remove old service discovery directory %s (%v)",
+				tc.serviceDiscoveryDirectory,
+				err,
+			)
+		}
 	}
-	if err := os.Mkdir(tc.serviceDiscoveryDirectory, os.ModePerm); err != nil {
-		tc.logger.Warningf("failed to create service discovery data directory %s (%v)", tc.serviceDiscoveryDirectory, err)
+	if _, err := os.Stat(tc.serviceDiscoveryDirectory); err != nil {
+		if err := os.Mkdir(tc.serviceDiscoveryDirectory, os.ModePerm); err != nil {
+			tc.logger.Warningf("failed to create service discovery data directory %s (%v)", tc.serviceDiscoveryDirectory, err)
+		}
 	}
 	tc.serviceDiscoveryFile = path.Join(tc.serviceDiscoveryDirectory, "config.json")
 	tc.metricsPort = rand.Intn(65534) + 1
@@ -697,21 +732,27 @@ func (tc *TestContext) cPUMetricsOfAllInstancesInTheInstancePoolMustBeVisibleInP
 			tc.logger.Debugf("failed to get instance pool (%v)", data.Data.ResultType)
 			continue
 		}
-		metricIps := map[string]bool{}
+		metricIPs := map[string]bool{}
+		var expectedIPs []string
 		for _, record := range data.Data.Result {
 			parts := strings.SplitN(record.Metric.Instance, ":", 2)
-			metricIps[parts[0]] = true
+			metricIPs[parts[0]] = true
+			expectedIPs = append(expectedIPs, parts[0])
 		}
+		tc.logger.Debugf("found the following IPs in the Prometheus output: %v", expectedIPs)
+		var foundIPs []string
 		allIpsFound := true
 		for _, vm := range instancePool.VirtualMachines {
 			for _, nic := range vm.Nic {
 				if nic.IsDefault {
-					if _, ok := metricIps[nic.IPAddress.String()]; !ok {
+					foundIPs = append(foundIPs, nic.IPAddress.String())
+					if _, ok := metricIPs[nic.IPAddress.String()]; !ok {
 						allIpsFound = false
 					}
 				}
 			}
 		}
+		tc.logger.Debugf("found following IPs in the instance pool: %v", foundIPs)
 		if !allIpsFound {
 			tc.logger.Debugf("not all IP's are in Prometheus")
 			continue

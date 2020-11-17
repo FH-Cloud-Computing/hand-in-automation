@@ -8,13 +8,13 @@ Feature: Sprint 2 Service Discovery
   # so that the service discovery agent is truly generic and can deal with various exporters running
   # on differnt ports, not just the Prometheus node exporter. Finally, we check if the service
   # discovery agent shuts down properly.
-  Scenario: Testing the service discovery
+  Scenario: Testing the service discovery [optional]
     When I build the Dockerfile in the "servicediscovery" folder
     And I apply the Terraform code
     And I start a container from the image
     And I set the instance pool to have 2 instances
     And I kill all instances in the pool
     And I wait for 2 instances to be present
-    Then all backends should be healthy after 600 seconds
-    And the service discovery file must contain all instance pool IPs within 120 seconds
+    Then all backends should be healthy after 900 seconds
+    And the service discovery file must contain all instance pool IPs within 300 seconds
     And I should be able to stop the container with a 0 exit code

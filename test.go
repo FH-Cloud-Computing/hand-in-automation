@@ -32,7 +32,7 @@ func RunTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerCl
 		return err
 	}
 	defer func() {
-		//Error logs are printed within wipeAccount
+		// Error logs are printed within wipeAccount
 		_ = wipeAccount(ctx, clientFactory, logger)
 	}()
 
@@ -74,7 +74,7 @@ func RunTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerCl
 	tc := NewTestContext(ctx, clientFactory, dockerClient, directory, userApiKey, userApiSecret, logger)
 	var opts = godog.Options{
 		Format:        "progress",
-		StopOnFailure: true,
+		StopOnFailure: false,
 		Strict:        true,
 		Concurrency:   1,
 	}
@@ -93,15 +93,25 @@ func RunTests(ctx context.Context, clientFactory *plugin.ClientFactory, dockerCl
 	go func() {
 		_, _ = io.Copy(&buf, r)
 	}()
-	status := s.Run()
+	_ = s.Run()
 	os.Stdout = realStdout
 	lines := strings.Split(buf.String(), "\n")
 	for _, line := range lines {
 		logger.Notice(line)
 	}
 
-	if status != 0 {
-		return fmt.Errorf("tests failed with status %d", status)
+	if len(tc.scenariosFailed) > 0 {
+		logger.Errorf("scenarios failed: %v", tc.scenariosFailed)
+	}
+	if len(tc.scenariosSuccessful) > 0 {
+		logger.Noticef("scenarios successful: %v", tc.scenariosSuccessful)
+	}
+	if len(tc.optionalScenariosFailed) > 0 {
+		logger.Warningf("optional scenarios failed: %v", tc.optionalScenariosFailed)
+	}
+
+	if len(tc.scenariosFailed) > 0 {
+		return fmt.Errorf("%d required scenarios failed", len(tc.scenariosFailed))
 	}
 
 	return nil
