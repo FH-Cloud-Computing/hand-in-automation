@@ -9,9 +9,9 @@ require (
 	github.com/containerssh/log v0.9.0
 	github.com/cucumber/godog v0.10.0
 	github.com/docker/docker v1.4.2-0.20190924003213-a8608b5b67c7
+	github.com/docker/go-connections v0.4.0
 	github.com/exoscale/egoscale v0.33.2
 	github.com/fatih/color v1.9.0
-	github.com/go-git/go-git/v5 v5.2.0
 	github.com/gorilla/mux v1.8.0
 	github.com/janoszen/exoscale-account-wiper v0.0.0-20201021212722-2bd94674235c
 	golang.org/x/time v0.0.0-20200630173020-3af7569d3a1e // indirect
